@@ -1,7 +1,7 @@
 {application, 'hex2nix',
  [{description, "Download the entire hex repository and output "
    "it as a set of nix expressions"}
- , {vsn, "0.1.0"}
+ , {vsn, "0.0.2"}
  , {applications, [kernel, stdlib, ibrowse
                   , jsx, erlware_commons
                   , getopt

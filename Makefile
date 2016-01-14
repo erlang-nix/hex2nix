@@ -36,7 +36,7 @@ test: bootstrap
 
 install:
 	rebar3-nix-bootstrap
-	HOME=$(CURDIR)
+	HOME=$(CURDIR) rebar3 escriptize
 	mkdir -p "$(BIN)"
 	cp "$(CURDIR)/_build/default/bin/hex2nix" "$(BIN)"
 	chmod a+x "$(BIN)/hex2nix"
