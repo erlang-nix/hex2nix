@@ -35,7 +35,7 @@
 %%
 %% Variables
 %%
--define(REGISTRY_URL, "https://s3.amazonaws.com/s3.hex.pm/registry.ets.gz").
+-define(REGISTRY_URL, "https://raw.githubusercontent.com/erlang-nix/hex-pm-registry-snapshots/master/registry.ets.gz").
 -define(OPTIONS,
         [
          {output_path, $o, "output-path", {string, "./"}
