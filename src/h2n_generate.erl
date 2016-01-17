@@ -145,7 +145,7 @@ key_value(Key, Value) ->
 
 -spec section_header([binary()]) -> prettypr:document().
 section_header(Deps) ->
-    sep([text("{ ")
+    sep([text("{")
         , nest(expand_arg_list([<<"buildHex">> | Deps], ",", []))
         , text("}:")]).
 
