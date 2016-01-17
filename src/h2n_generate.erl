@@ -27,7 +27,7 @@
 %% ============================================================================
 -spec nix_expression([h2n_fetcher:dep_desc()]) -> string().
 nix_expression(Deps0) ->
-    Deps1 = sort_deps(Deps0),
+    Deps1 = sort_and_dedup_deps(Deps0),
     Doc = above(above(header(),
                       nest(par([sep([text("self"), text("="), text("rec {")])
                                , nest(create_body(Deps1))
@@ -38,10 +38,10 @@ nix_expression(Deps0) ->
 %% ============================================================================
 %% Internal Functions
 %% ============================================================================
--spec sort_deps([h2n_fetcher:dep_desc()]) -> [h2n_fetcher:dep_desc()].
-sort_deps(Deps) ->
-    lists:sort(fun(#dep_desc{app=App1}, #dep_desc{app=App2}) ->
-                       App1 < App2
+-spec sort_and_dedup_deps([h2n_fetcher:dep_desc()]) -> [h2n_fetcher:dep_desc()].
+sort_and_dedup_deps(Deps) ->
+    lists:usort(fun(#dep_desc{app=App1}, #dep_desc{app=App2}) ->
+                       App1 =< App2
                end, Deps).
 
 -spec create_body([h2n_fetcher:dep_desc()]) -> prettypr:document().
