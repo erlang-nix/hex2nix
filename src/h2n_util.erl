@@ -16,6 +16,10 @@
         , json_to_list/1
         , json_get_list/2
         , temp_directory/0
+        , run/1
+        , cmd/1
+        , run/2
+        , cmd/2
         ]).
 
 %% ============================================================================
@@ -81,4 +85,34 @@ json_get_list(Key, Object) ->
 
 -spec temp_directory() -> string().
 temp_directory() ->
-    lib:nonl(os:cmd( "mktemp -d")).
+    lib:nonl(cmd("mktemp -d")).
+
+-spec cmd(string()) -> string().
+cmd(Cmd) ->
+    {ok, Output} = run(Cmd),
+    lists:flatten(Output).
+
+-spec cmd(string(), [any()]) -> string().
+cmd(CmdFormat, FormatArgs) ->
+    {ok, Output} = run(CmdFormat, FormatArgs),
+    lists:flatten(Output).
+
+-spec run(string(), [any()]) -> {'ok', iolist()} | {'error', integer(), iolist()}.
+run(CmdFormat, FormatArgs) ->
+    run(io_lib:format(CmdFormat, FormatArgs)).
+
+-spec run(string()) -> {'ok', iolist()} | {'error', integer(), iolist()}.
+run(Cmd) ->
+    Port = erlang:open_port({spawn, Cmd}, [exit_status]),
+    run_flush(Port, []).
+
+-spec run_flush(port(), iolist()) -> {'ok', iolist()} | {'error', integer(), iolist()}.
+run_flush(Port, Acc) ->
+    receive
+        {Port, {exit_status, 0}} ->
+            {ok, lists:reverse(Acc)};
+        {Port, {exit_status, Status}} ->
+            {error, Status, lists:reverse(Acc)};
+        {Port, {data, L}} ->
+            run_flush(Port, [L|Acc])
+    end.

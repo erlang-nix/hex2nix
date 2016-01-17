@@ -137,7 +137,7 @@ get_deep_meta_for_package(AppName, AppVsn) ->
                         , []
                         , [{save_response_to_file,
                             TargetPath}]),
-    [Sha | _]  = string:tokens(os:cmd(io_lib:format("sha256sum \"~s\"", [DownloadedPath])),
+    [Sha | _]  = string:tokens(h2n_util:cmd("sha256sum \"~s\"", [DownloadedPath]),
                                " "),
     io:format("Got Sha ~s for ~s~n", [Sha, Package]),
     {HasNativeCode, BuildPlugins} = has_native_code_and_plugins(TempDirectory, TargetPath),

@@ -131,28 +131,12 @@ try_build_and_write_packages(#dep_desc{app = App} = Package, Failing, Deps, NixP
 -spec try_build(h2n_fetcher:dep_desc()) -> boolean().
 try_build(#dep_desc{app = App}) ->
     NixName = h2n_generate:format_name(App),
-    case run(io_lib:format("nix-build $NIX_PATH/nixpkgs/ -A erlangPackages.~s", [NixName])) of
+    case h2n_util:run("nix-build $NIX_PATH/nixpkgs/ -A erlangPackages.~s", [NixName]) of
         {ok, _} ->
             true;
         {error, Status, Out} ->
             io:fwrite("Building of ~p failed (~b) with:~n~s~n", [App, Status, Out]),
             false
-    end.
-
--spec run(string()) -> {'ok', iolist()} | {'error', integer(), iolist()}.
-run(Cmd) ->
-    Port = erlang:open_port({spawn, Cmd}, [exit_status]),
-    run_flush(Port, []).
-
--spec run_flush(port(), iolist()) -> {'ok', iolist()} | {'error', integer(), iolist()}.
-run_flush(Port, Acc) ->
-    receive
-        {Port, {exit_status, 0}} ->
-            {ok, lists:reverse(Acc)};
-        {Port, {exit_status, Status}} ->
-            {error, Status, lists:reverse(Acc)};
-        {Port, {data, L}} ->
-            run_flush(Port, [L|Acc])
     end.
 
 -spec write_nix_expressions(ordsets:ordset(), ordsets:ordset(), string()) -> 'ok'.
