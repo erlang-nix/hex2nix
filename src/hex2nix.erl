@@ -41,8 +41,11 @@
          {output_path, $o, "output-path", {string, "./"}
          ,  "Output Path for the `hex-packages.nix` file"}
         , {registry_url, $r, "registry-url"
-         , {string, ?REGISTRY_URL}
-         , "The url of the registry to base generation on"}
+          , {string, ?REGISTRY_URL}
+          , "The url of the registry to base generation on"}
+        , {build,  $b, "build-packages", {boolean, false}
+          , "Try to build packages with nix and filter out those which fail. "
+           "Uses NIX_PATH environmental variable."}
         , {cache,  $c, "cache-result", {boolean, false}
           , "Cache the result of package download so it can be reused. "
            "This is primarily useful for testing."}
@@ -77,6 +80,7 @@ do_main(Opts) ->
     {value, {_, HexRegistry}} = lists:keysearch(registry_url, 1, Opts),
     {value, {_, NixPkgsDir}} = lists:keysearch(output_path, 1, Opts),
     {value, {_, ShouldCache}} = lists:keysearch(cache, 1, Opts),
+    {value, {_, ShouldBuild}} = lists:keysearch(build, 1, Opts),
 
     {DepRoots0, AppData0} = split_data_into_versions_and_detail(get_registry(HexRegistry)),
     AppData1 = cleanup_app_data(AppData0),
@@ -86,10 +90,74 @@ do_main(Opts) ->
                           , index=AllBuildableVersions
                           , detail=AppData1},
     Deps =
-        h2n_fetcher:update_with_information_from_hex_pm(ShouldCache
-                                                       , Detail
-                                                       , h2n_resolver:resolve_dependencies(Detail)),
-    Document = h2n_generate:nix_expression(Deps),
+        ordsets:from_list(
+          h2n_fetcher:update_with_information_from_hex_pm(ShouldCache
+                                                         , Detail
+                                                         , h2n_resolver:resolve_dependencies(Detail))),
+    write_nix_expressions(Deps, ordsets:new(), NixPkgsDir),
+    case ShouldBuild of
+        true ->
+            %% Given Nix nature it is enough to iterate over all packages and
+            %% remove the ones which fail. There is no need to do graph
+            %% traversal and pruning, since Nix does builds hermetically and
+            %% reproducibly - it is safe to assume that if a dependency fails,
+            %% the package will fail as well.
+            lists:foldl(fun(Dep, Failing) ->
+                                try_build_and_write_packages(Dep, Failing, Deps, NixPkgsDir)
+                        end, ordsets:new(), Deps);
+        false ->
+            ok
+    end.
+
+-spec try_build_and_write_packages(h2n_fetcher:dep_desc(),
+                                   ordsets:ordset(),
+                                   ordsets:ordset(),
+                                   string()) ->
+                                          ordsets:ordset().
+try_build_and_write_packages(#dep_desc{app = App} = Package, Failing, Deps, NixPkgsDir) ->
+    io:format("Attempting to build ~p~n", [Package]),
+    Failing2 = case try_build(Package) of
+                   true ->
+                       Failing;
+                   false ->
+                       io:fwrite("Removing ~p from hex-packages.nix~n", [App]),
+                       ordsets:add_element(Package, Failing)
+               end,
+    write_nix_expressions(ordsets:subtract(Deps, Failing2),
+                          Failing2,
+                          NixPkgsDir),
+    Failing2.
+
+-spec try_build(h2n_fetcher:dep_desc()) -> boolean().
+try_build(#dep_desc{app = App}) ->
+    NixName = h2n_generate:format_name(App),
+    case run(io_lib:format("nix-build $NIX_PATH/nixpkgs/ -A erlangPackages.~s", [NixName])) of
+        {ok, _} ->
+            true;
+        {error, Status, Out} ->
+            io:fwrite("Building of ~p failed (~b) with:~n~s~n", [App, Status, Out]),
+            false
+    end.
+
+-spec run(string()) -> {'ok', iolist()} | {'error', integer(), iolist()}.
+run(Cmd) ->
+    Port = erlang:open_port({spawn, Cmd}, [exit_status]),
+    run_flush(Port, []).
+
+-spec run_flush(port(), iolist()) -> {'ok', iolist()} | {'error', integer(), iolist()}.
+run_flush(Port, Acc) ->
+    receive
+        {Port, {exit_status, 0}} ->
+            {ok, lists:reverse(Acc)};
+        {Port, {exit_status, Status}} ->
+            {error, Status, lists:reverse(Acc)};
+        {Port, {data, L}} ->
+            run_flush(Port, [L|Acc])
+    end.
+
+-spec write_nix_expressions(ordsets:ordset(), ordsets:ordset(), string()) -> 'ok'.
+write_nix_expressions(Deps, Failing, NixPkgsDir) ->
+    Document = h2n_generate:nix_expression(ordsets:to_list(Deps), ordsets:to_list(Failing)),
     OutputPath = filename:join(NixPkgsDir, "hex-packages.nix"),
     ok = filelib:ensure_dir(OutputPath),
     file:write_file(OutputPath, Document),
