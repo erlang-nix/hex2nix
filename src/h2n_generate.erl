@@ -10,7 +10,9 @@
 %%
 %% API
 %%
--export([nix_expression/1]).
+-export([nix_expression/2]).
+
+-export([format_name/1, format_name/2]).
 
 -include("hex2nix.hrl").
 %%
@@ -25,10 +27,11 @@
 %% ============================================================================
 %% Exported Functions
 %% ============================================================================
--spec nix_expression([h2n_fetcher:dep_desc()]) -> string().
-nix_expression(Deps0) ->
-    Deps1 = sort_deps(Deps0),
-    Doc = above(above(header(),
+-spec nix_expression([h2n_fetcher:dep_desc()],
+                     [h2n_fetcher:dep_desc()]) -> string().
+nix_expression(Deps0, Failing) ->
+    Deps1 = sort_and_dedup_deps(Deps0),
+    Doc = above(above(header(Failing),
                       nest(par([sep([text("self"), text("="), text("rec {")])
                                , nest(create_body(Deps1))
                                , break(text("};"))]))),
@@ -38,10 +41,10 @@ nix_expression(Deps0) ->
 %% ============================================================================
 %% Internal Functions
 %% ============================================================================
--spec sort_deps([h2n_fetcher:dep_desc()]) -> [h2n_fetcher:dep_desc()].
-sort_deps(Deps) ->
-    lists:sort(fun(#dep_desc{app=App1}, #dep_desc{app=App2}) ->
-                       App1 < App2
+-spec sort_and_dedup_deps([h2n_fetcher:dep_desc()]) -> [h2n_fetcher:dep_desc()].
+sort_and_dedup_deps(Deps) ->
+    lists:usort(fun(#dep_desc{app=App1}, #dep_desc{app=App2}) ->
+                       App1 =< App2
                end, Deps).
 
 -spec create_body([h2n_fetcher:dep_desc()]) -> prettypr:document().
@@ -72,6 +75,7 @@ format_position(_, _, _) ->
 
 -spec app_body(h2n_fetcher:dep_despc(), [binary()]) -> prettypr:document().
 app_body(Dep = #dep_desc{app = {Name, Vsn},
+                         build_plugins = BuildPlugins,
                          sha = Sha},
          Deps) ->
     erlang_deps(Deps),
@@ -80,13 +84,14 @@ app_body(Dep = #dep_desc{app = {Name, Vsn},
                    , key_value(<<"version">>, Vsn)
                    , key_value(<<"sha256">>, Sha)
                    , format_compile_port(Dep)
+                   , build_plugins(BuildPlugins)
                    , erlang_deps(Deps)
                    , meta(Dep)]))
         , text("}")]).
 
 -spec format_compile_port(h2n_fetcher:dep_desc()) -> prettypr:document().
 format_compile_port(#dep_desc{has_native_code = true}) ->
-    break(follow(text(["compilePort", " ="]), text("true;")));
+    break(follow(text(["compilePorts", " ="]), text("true;")));
 format_compile_port(_) ->
     empty().
 
@@ -130,11 +135,19 @@ format_licenses(Values) ->
         , nest(expand_arg_list(Values, "", []))
         , text("];")]).
 
+-spec build_plugins([binary()]) -> prettypr:document().
+build_plugins(Deps) ->
+    key_list("buildPlugins", Deps).
+
 -spec erlang_deps([binary()]) -> prettypr:document().
-erlang_deps([]) ->
-    empty();
 erlang_deps(Deps) ->
-    blank_line(follow(text("erlangDeps =")
+    key_list("erlangDeps", Deps).
+
+-spec key_list(iolist(), [binary()]) -> prettypr:document().
+key_list(_Key, []) ->
+    empty();
+key_list(Key, Deps) ->
+    blank_line(follow(sep([text(Key), text(" =")])
                      , par([text("[")
                            , nest(expand_arg_list(Deps, "", []))
                            , text("];")]))).
@@ -145,7 +158,7 @@ key_value(Key, Value) ->
 
 -spec section_header([binary()]) -> prettypr:document().
 section_header(Deps) ->
-    sep([text("{ ")
+    sep([text("{")
         , nest(expand_arg_list([<<"buildHex">> | Deps], ",", []))
         , text("}:")]).
 
@@ -158,19 +171,44 @@ expand_arg_list([Name], _Sep, Acc) ->
 expand_arg_list([Name | Tail], Sep, Acc) ->
     expand_arg_list(Tail, Sep, [text([Name, Sep]) | Acc]).
 
+-spec format_name(hex2nix:dep_desc() |
+                  {hex2nix:app_name(), hex2nix:app_version()}) ->
+                         binary().
+format_name(#dep_desc{app = App}) ->
+    format_name(App);
+format_name({Name, Vsn}) ->
+    format_name(Name, Vsn).
+
 -spec format_name(hex2nix:app_name(), hex2nix:app_version()) ->
                          binary().
 format_name(Name, Vsn) ->
     erlang:iolist_to_binary([Name, "_", convert_vsn_to_name_part(Vsn)]).
 
--spec header() -> prettypr:document().
-header() ->
-    Banner = text("/* hex-packages.nix is an auto-generated file -- DO NOT EDIT! */"),
-    Header = [blank_line(text("{ stdenv, callPackage }:"))
+-spec header([h2n_fetcher:dep_desc()]) -> prettypr:document().
+header(Failing) ->
+    Header = [text("/* hex-packages.nix is an auto-generated file -- DO NOT EDIT! */")
+             , text("")
+             , list_failing(Failing)
+             , blank_line(text("{ stdenv, callPackage }:"))
              , text("let")],
+    vertical_list(Header).
+
+-spec list_failing([h2n_fetcher:dep_desc()]) -> prettypr:document().
+list_failing(Failing) ->
+    Names = lists:map(fun(X) ->
+                              text([" * ", format_name(X)])
+                      end, Failing),
+    vertical_list([text("/* Unbuildable packages: "),
+                   text("")]
+                  ++ Names
+                  ++ [text(""),
+                      text("*/")]).
+
+-spec vertical_list([prettypr:document()]) -> prettypr:document().
+vertical_list([H|L]) ->
     lists:foldl(fun(Doc, Acc) ->
-                            above(Acc, Doc)
-                end, Banner, Header).
+                        above(Acc, Doc)
+                end, H,  L).
 
 %% @doc
 %% Produces a blank line after the provided document
