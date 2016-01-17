@@ -35,7 +35,6 @@ binary_to_lower(Value) ->
 iolist_to_list(Value) ->
     erlang:binary_to_list(erlang:iolist_to_binary(Value)).
 
-
 %% @doc
 %% This mostly exists to make sure a value is actually a list from jsx
 %% and to make dialyzer happy

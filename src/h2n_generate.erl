@@ -86,7 +86,7 @@ app_body(Dep = #dep_desc{app = {Name, Vsn},
 
 -spec format_compile_port(h2n_fetcher:dep_desc()) -> prettypr:document().
 format_compile_port(#dep_desc{has_native_code = true}) ->
-    break(follow(text(["compilePort", " ="]), text("true;")));
+    break(follow(text(["compilePorts", " ="]), text("true;")));
 format_compile_port(_) ->
     empty().
 
