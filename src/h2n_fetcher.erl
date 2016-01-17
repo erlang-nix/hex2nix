@@ -94,13 +94,14 @@ decorate_app(#indexed_deps{roots=Roots},
              end,
     {Description, Licenses, Link} =
         get_metadata(AppName, get_app_detail_from_hex_pm(AppName)),
-    {Sha, HasNativeCode} = get_deep_meta_for_package(AppName, AppVsn),
+    {Sha, HasNativeCode, BuildPlugins} = get_deep_meta_for_package(AppName, AppVsn),
     #dep_desc{app = App
              , description = Description
              , position = IsRoot
              , licenses = Licenses
              , homepage = Link
              , sha = Sha
+             , build_plugins = BuildPlugins
              , has_native_code = HasNativeCode
              , deps = Deps}.
 
@@ -121,7 +122,7 @@ get_app_detail_from_hex_pm(AppName) ->
     jsx:decode(erlang:iolist_to_binary(Body)).
 
 -spec get_deep_meta_for_package(hex2nix:app_name(), hex2nix:app_version()) ->
-                                 {sha(), boolean()}.
+                                 {sha(), boolean(), [hex2nix:app_name()]}.
 get_deep_meta_for_package(AppName, AppVsn) ->
     TempDirectory = h2n_util:temp_directory(),
     Package = binary_to_list(<<AppName/binary, "-", AppVsn/binary, ".tar">>),
@@ -139,31 +140,39 @@ get_deep_meta_for_package(AppName, AppVsn) ->
     [Sha | _]  = string:tokens(os:cmd(io_lib:format("sha256sum \"~s\"", [DownloadedPath])),
                                " "),
     io:format("Got Sha ~s for ~s~n", [Sha, Package]),
-    {erlang:list_to_binary(Sha), has_native_code(TempDirectory, TargetPath)}.
+    {HasNativeCode, BuildPlugins} = has_native_code_and_plugins(TempDirectory, TargetPath),
+    {erlang:list_to_binary(Sha), HasNativeCode, BuildPlugins}.
 
--spec has_native_code(file:filename(), file:filename()) -> boolean().
-has_native_code(TempDirectory, TargetPath) ->
+-spec has_native_code_and_plugins(file:filename(), file:filename()) -> {boolean(), [hex2nix:app_name()]}.
+has_native_code_and_plugins(TempDirectory, TargetPath) ->
     ok = erl_tar:extract(TargetPath, [{cwd, TempDirectory}]),
     ContentsPath = filename:join(TempDirectory, "contents.tar.gz"),
     {ok, DirListing} = erl_tar:table(ContentsPath, [compressed]) ,
-    look_for_port_spec(ContentsPath, TempDirectory,
-                      lists:any(fun(Path) ->
-                                        lists:prefix("c_src/", Path)
-                                end, DirListing)).
+    HasCSrc = lists:any(fun(Path) ->
+                                lists:prefix("c_src/", Path)
+                        end, DirListing),
+    ok = erl_tar:extract(ContentsPath, [{cwd, TempDirectory}
+                                       , {files, "rebar.config"},
+                                        compressed]),
+    {HasPortSpec, BuildPlugins} = analyze_rebar_config(TempDirectory),
+    {HasCSrc orelse HasPortSpec, BuildPlugins}.
 
--spec look_for_port_spec(file:filename(), file:filename(), boolean()) -> boolean().
-look_for_port_spec(_TarFile, _TempDirectory, true) ->
-    true;
-look_for_port_spec(TarFile, TempDirectory, false) ->
-    ok = erl_tar:extract(TarFile, [{cwd, TempDirectory}
-                                , {files, "rebar.config"},
-                                  compressed]),
+-spec analyze_rebar_config(file:filename()) -> {boolean(), [hex2nix:app_name()]}.
+analyze_rebar_config(TempDirectory) ->
     case file:consult(filename:join(TempDirectory, "rebar.config")) of
         {ok, [Options]} ->
-            lists:keymember("port_spec", 1, Options);
+            BuildPlugins = lists:map(fun simplify_plugin/1,
+                                     proplists:get_value(plugins, Options, [])),
+            {lists:keymember("port_spec", 1, Options), BuildPlugins};
         _ ->
-            false
+            {false, []}
     end.
+
+-spec simplify_plugin(atom() | {atom(), any(), any()}) -> binary().
+simplify_plugin({Name, _Vsn, _Vcs}) when is_atom(Name) ->
+    atom_to_binary(Name, latin1);
+simplify_plugin(Name) when is_atom(Name) ->
+    atom_to_binary(Name, latin1).
 
 -spec get_metadata(hex2nix:app_name(), {[{binary(), binary()}]} | any()) ->
                           {description(), [license()], link()}.

@@ -72,6 +72,7 @@ format_position(_, _, _) ->
 
 -spec app_body(h2n_fetcher:dep_despc(), [binary()]) -> prettypr:document().
 app_body(Dep = #dep_desc{app = {Name, Vsn},
+                         build_plugins = BuildPlugins,
                          sha = Sha},
          Deps) ->
     erlang_deps(Deps),
@@ -80,6 +81,7 @@ app_body(Dep = #dep_desc{app = {Name, Vsn},
                    , key_value(<<"version">>, Vsn)
                    , key_value(<<"sha256">>, Sha)
                    , format_compile_port(Dep)
+                   , build_plugins(BuildPlugins)
                    , erlang_deps(Deps)
                    , meta(Dep)]))
         , text("}")]).
@@ -130,11 +132,19 @@ format_licenses(Values) ->
         , nest(expand_arg_list(Values, "", []))
         , text("];")]).
 
+-spec build_plugins([binary()]) -> prettypr:document().
+build_plugins(Deps) ->
+    key_list("buildPlugins", Deps).
+
 -spec erlang_deps([binary()]) -> prettypr:document().
-erlang_deps([]) ->
-    empty();
 erlang_deps(Deps) ->
-    blank_line(follow(text("erlangDeps =")
+    key_list("erlangDeps", Deps).
+
+-spec key_list(iolist(), [binary()]) -> prettypr:document().
+key_list(_Key, []) ->
+    empty();
+key_list(Key, Deps) ->
+    blank_line(follow(sep([text(Key), text(" =")])
                      , par([text("[")
                            , nest(expand_arg_list(Deps, "", []))
                            , text("];")]))).
