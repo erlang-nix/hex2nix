@@ -152,7 +152,7 @@ has_native_code_and_plugins(TempDirectory, TargetPath) ->
                                 lists:prefix("c_src/", Path)
                         end, DirListing),
     ok = erl_tar:extract(ContentsPath, [{cwd, TempDirectory}
-                                       , {files, "rebar.config"},
+                                       , {files, ["rebar.config"]},
                                         compressed]),
     {HasPortSpec, BuildPlugins} = analyze_rebar_config(TempDirectory),
     {HasCSrc orelse HasPortSpec, BuildPlugins}.
@@ -160,7 +160,7 @@ has_native_code_and_plugins(TempDirectory, TargetPath) ->
 -spec analyze_rebar_config(file:filename()) -> {boolean(), [hex2nix:app_name()]}.
 analyze_rebar_config(TempDirectory) ->
     case file:consult(filename:join(TempDirectory, "rebar.config")) of
-        {ok, [Options]} ->
+        {ok, Options} ->
             BuildPlugins = lists:map(fun simplify_plugin/1,
                                      proplists:get_value(plugins, Options, [])),
             {lists:keymember("port_spec", 1, Options), BuildPlugins};
