@@ -49,6 +49,11 @@
         , {cache,  $c, "cache-result", {boolean, false}
           , "Cache the result of package download so it can be reused. "
            "This is primarily useful for testing."}
+        , {filter, $f, "filter", {string, ".*"}
+          , "Allows to filter packages by name using provided PCRE regex. "
+          "Filtering happens before dependency resolution, hence to successfully "
+          "import a package filter need to allow both the package and all it's "
+          "dependencies."}
         , {help, $h, "help", {boolean, false}
           , "Print the help message for this command"}
         ]).
@@ -81,9 +86,10 @@ do_main(Opts) ->
     {value, {_, NixPkgsDir}} = lists:keysearch(output_path, 1, Opts),
     {value, {_, ShouldCache}} = lists:keysearch(cache, 1, Opts),
     {value, {_, ShouldBuild}} = lists:keysearch(build, 1, Opts),
+    {value, {_, Filter}} = lists:keysearch(filter, 1, Opts),
 
     {DepRoots0, AppData0} = split_data_into_versions_and_detail(get_registry(HexRegistry)),
-    AppData1 = cleanup_app_data(AppData0),
+    AppData1 = cleanup_app_data(Filter, AppData0),
     AllBuildableVersions = find_all_buildable_versions(AppData1),
     DepRoots1 = reduce_to_latest_buildable_version(AppData1, DepRoots0),
     Detail = #indexed_deps{roots=sets:from_list(DepRoots1)
@@ -189,10 +195,11 @@ find_all_buildable_versions(AppData) ->
                       dict:append(Name, Version, Acc)
                 end, dict:new(), AppData).
 
--spec cleanup_app_data([any()]) -> dict:dict(app(), app_detail()).
-cleanup_app_data(AppData) ->
+-spec cleanup_app_data(string(), [any()]) -> dict:dict(app(), app_detail()).
+cleanup_app_data(Filter, AppData) ->
     lists:foldl(fun({App, [Deps, _, BuildSystems]}, Acc) ->
-                        case is_supported_build_system(BuildSystems) of
+                        case (is_supported_build_system(BuildSystems) andalso
+                              filter_by_name(Filter, App)) of
                             true ->
                                 dict:store(App, simplify_deps(Deps), Acc);
                             false ->
@@ -202,6 +209,16 @@ cleanup_app_data(AppData) ->
                         io:format("Discarding malformed detail: ~p~n", [X]),
                         Acc
                 end, dict:new(), AppData).
+
+-spec filter_by_name(string(), #dep_desc{}) -> boolean().
+filter_by_name(Filter, App) ->
+    NixName = h2n_generate:format_name(App),
+    case re:run(NixName, Filter) of
+        {match, _} ->
+            true;
+        nomatch ->
+            false
+    end.
 
 -spec decompress_file(file:filename(), file:filename()) ->
                              {ok, file:filename()}.
