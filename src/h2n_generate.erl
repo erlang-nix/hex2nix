@@ -36,7 +36,9 @@ nix_expression(Deps0, Failing) ->
                                , nest(create_body(Deps1))
                                , break(text("};"))]))),
                 text("in stdenv.lib.fix' (stdenv.lib.extends overrides packages)")),
-    prettypr:format(Doc).
+    Pretty = prettypr:format(Doc),
+    Pretty1 = re:replace(Pretty, "\t", "        ", [global]),
+    re:replace(Pretty1, "\\h+\\n", "\n", [global]).
 
 %% ============================================================================
 %% Internal Functions
