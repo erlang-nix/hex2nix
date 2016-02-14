@@ -125,7 +125,7 @@ format_description(<<"">>) ->
     empty();
 format_description(Description)
   when erlang:size(Description) =< 80 ->
-    key_value(<<"description">>, Description);
+    key_value_sep(<<"description">>, Description, "''");
 format_description(Description) ->
     DescBody = erlang:iolist_to_binary(["''", Description, "'';"]),
     break(follow(text(["longDescription", " ="])
@@ -163,7 +163,11 @@ key_list(Key, Deps) ->
 
 -spec key_value(binary(), binary()) -> prettypr:document().
 key_value(Key, Value) ->
-    break(follow(text([Key, " ="]), text(["\"", Value, "\";"]))).
+    key_value_sep(Key, Value, "\"").
+
+-spec key_value_sep(binary(), binary(), string()) -> prettypr:document().
+key_value_sep(Key, Value, Sep) ->
+    break(follow(text([Key, " ="]), text([Sep, Value, Sep, ";"]))).
 
 -spec section_header([binary()]) -> prettypr:document().
 section_header(Deps) ->
