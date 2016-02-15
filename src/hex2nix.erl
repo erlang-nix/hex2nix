@@ -51,9 +51,10 @@
            "This is primarily useful for testing."}
         , {filter, $f, "filter", {string, ".*"}
           , "Allows to filter packages by name using provided PCRE regex. "
-          "Filtering happens before dependency resolution, hence to successfully "
-          "import a package filter need to allow both the package and all it's "
-          "dependencies."}
+           "Matching happens against strings like \"jsx_2_7_0\". Filtering "
+           "happens before dependency resolution, hence to successfully import "
+           "a package filter need to allow both the package and all it's "
+           "dependencies."}
         , {help, $h, "help", {boolean, false}
           , "Print the help message for this command"}
         ]).
@@ -253,15 +254,30 @@ is_supported_build_system(_) ->  false.
                                          [{app_name(), [app_version()]}]) ->
                                                 [app()].
 reduce_to_latest_buildable_version(AppData, AppVersions) ->
-    lists:foldl(fun({Name, [Versions]}, Acc) ->
-                        [HardVersion | _] = lists:sort(fun ec_semver:gte/2, Versions),
-                        case dict:find({Name, HardVersion}, AppData) of
-                            {ok,  _} ->
-                                [{Name, HardVersion} | Acc];
-                            error ->
-                                Acc
-                        end
-              end, [], AppVersions).
+    lists:foldl(
+      fun({Name, [Versions]}, Acc) ->
+              SortedVersions = lists:sort(fun ec_semver:gte/2, Versions),
+              case find_latest_available_version(Name, SortedVersions, AppData) of
+                  {ok,  HardVersion} ->
+                      [{Name, HardVersion} | Acc];
+                  error ->
+                      Acc
+              end
+      end, [], AppVersions).
+
+-spec find_latest_available_version(app_name(),
+                                    [app_version()],
+                                    dict:dict(app(), app_detail())) ->
+                                           {ok, app_version()} | error.
+find_latest_available_version(_, [], _) ->
+    error;
+find_latest_available_version(Name, [HardVersion | Versions], AppData) ->
+    case dict:find({Name, HardVersion}, AppData) of
+        {ok,  _} ->
+            {ok, HardVersion};
+        error ->
+            find_latest_available_version(Name, Versions, AppData)
+    end.
 
 %%%===================================================================
 %%% Test Functions
