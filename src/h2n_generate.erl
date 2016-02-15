@@ -32,11 +32,13 @@
 nix_expression(Deps0, Failing) ->
     Deps1 = sort_and_dedup_deps(Deps0),
     Doc = above(above(header(Failing),
-                      nest(par([sep([text("self"), text("="), text("rec {")])
+                      nest(par([sep([text("packages"), text("="), text("self: rec {")])
                                , nest(create_body(Deps1))
                                , break(text("};"))]))),
-                text("in self")),
-    prettypr:format(Doc).
+                text("in stdenv.lib.fix' (stdenv.lib.extends overrides packages)")),
+    Pretty = prettypr:format(Doc),
+    Pretty1 = re:replace(Pretty, "\t", "        ", [global]),
+    re:replace(Pretty1, "\\h+\\n", "\n", [global]).
 
 %% ============================================================================
 %% Internal Functions
@@ -189,7 +191,7 @@ header(Failing) ->
     Header = [text("/* hex-packages.nix is an auto-generated file -- DO NOT EDIT! */")
              , text("")
              , list_failing(Failing)
-             , blank_line(text("{ stdenv, callPackage }:"))
+             , blank_line(text("{ stdenv, callPackage, overrides ? (self: super: {}) }:"))
              , text("let")],
     vertical_list(Header).
 
