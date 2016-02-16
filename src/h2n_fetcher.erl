@@ -51,36 +51,41 @@
                                          , [h2n_resolver:app_dep()]) ->
                                          [dep_desc()].
 update_with_information_from_hex_pm(true, AllApps, Deps) ->
-    update_with_information_from_hex_pm_with_cache(AllApps, Deps);
+    Cache =
+        case file:consult(?CACHE_FILE) of
+            {ok, [CachedDeps]} ->
+                io:format("Loading available deps information from cache: ~s~n",
+                          [?CACHE_FILE]),
+                CachedDeps;
+            _ ->
+                []
+        end,
+    NewDeps = update_with_information_from_hex_pm2(AllApps, Cache, Deps),
+    ec_file:write_term(?CACHE_FILE, NewDeps),
+    NewDeps;
 update_with_information_from_hex_pm(false, AllApps, Deps) ->
-    update_with_information_from_hex_pm_direct(AllApps, Deps).
+    update_with_information_from_hex_pm2(AllApps, [], Deps).
 
 
 %% ============================================================================
 %% Internal Functions
 %% ============================================================================
 
--spec update_with_information_from_hex_pm_with_cache(hex2nix:deps()
-                                                    , [h2n_resolver:app_dep()]) ->
-                                                            [dep_desc()].
-update_with_information_from_hex_pm_with_cache(AllApps, Deps) ->
-    case file:consult(?CACHE_FILE) of
-        {ok, [NewDeps]} ->
-            io:format("Loading deps from cache: ~s~n", [?CACHE_FILE]),
-            NewDeps;
-        _ ->
-            NewDeps = update_with_information_from_hex_pm_direct(AllApps, Deps),
-            ec_file:write_term(?CACHE_FILE, NewDeps),
-            NewDeps
-    end.
-
--spec update_with_information_from_hex_pm_direct(hex2nix:deps(),
-                                                 [h2n_resolver:app_dep()]) ->
+-spec update_with_information_from_hex_pm2(hex2nix:deps(),
+                                           [dep_desc()],
+                                           [h2n_resolver:app_dep()]) ->
                                                   [dep_desc()].
-update_with_information_from_hex_pm_direct(AllApps, Deps) ->
-    lists:map(fun (App) ->
-                      decorate_app(AllApps, App)
-              end, Deps).
+update_with_information_from_hex_pm2(AllApps, Cache, Deps) ->
+    lists:map(
+      fun (AppDep={App={AppName, AppVsn}, _Deps}) ->
+              case lists:keysearch(App, #dep_desc.app, Cache) of
+                  {value, Cached} ->
+                      io:format("Found ~s ~s details in cache.~n", [AppName, AppVsn]),
+                      Cached;
+                  false ->
+                      decorate_app(AllApps, AppDep)
+              end
+      end, Deps).
 
 -spec decorate_app(hex2nix:deps(), {hex2nix:app(), [hex2nix:app()]}) ->
                           dep_desc().
