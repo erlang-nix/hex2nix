@@ -89,7 +89,8 @@ do_main(Opts) ->
     {value, {_, ShouldBuild}} = lists:keysearch(build, 1, Opts),
     {value, {_, Filter}} = lists:keysearch(filter, 1, Opts),
 
-    {DepRoots0, AppData0} = split_data_into_versions_and_detail(get_registry(HexRegistry)),
+    {DepRoots0, AppData0} = split_data_into_versions_and_detail(
+                              h2n_fetcher:get_registry(ShouldCache, HexRegistry)),
     AppData1 = cleanup_app_data(Filter, AppData0),
     AllBuildableVersions = find_all_buildable_versions(AppData1),
     DepRoots1 = reduce_to_latest_buildable_version(AppData1, DepRoots0),
@@ -160,22 +161,6 @@ start_dependencies() ->
     ibrowse:start(),
     ok.
 
--spec get_registry(file:filename()) ->  [any()].
-get_registry(HexRegistry) ->
-    TempDirectory = h2n_util:temp_directory(),
-    io:format("Pulling Hex Registry From ~s to ~s~n"
-             , [HexRegistry, TempDirectory]),
-    {ok, "200", _, {file, GzippedFileName}} =
-        ibrowse:send_req(HexRegistry
-                        , []
-                        , get
-                        , []
-                        , [{save_response_to_file,
-                            filename:join(TempDirectory, "registry.ets.gz")}]),
-    {ok, RegistryFile} = decompress_file(GzippedFileName, TempDirectory),
-    {ok, RegistryTable} = ets:file2tab(RegistryFile),
-    ets:tab2list(RegistryTable).
-
 %% ============================================================================
 %% Side Effect Free Functions
 %% ============================================================================
@@ -220,16 +205,6 @@ filter_by_name(Filter, App) ->
         nomatch ->
             false
     end.
-
--spec decompress_file(file:filename(), file:filename()) ->
-                             {ok, file:filename()}.
-decompress_file(GzippedFileName, TargetDirectory) ->
-    ResultFile = filename:join(TargetDirectory, "registry.ets"),
-    {ok, Data} = file:read_file(GzippedFileName),
-    UncompressedData = zlib:gunzip(Data),
-    file:write_file(ResultFile, UncompressedData, []),
-    io:format("File uncompressed to ~s~n", [ResultFile]),
-    {ok, ResultFile}.
 
 -spec simplify_deps([[any()]]) ->
                            [app()].

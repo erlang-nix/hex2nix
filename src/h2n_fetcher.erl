@@ -12,7 +12,8 @@
 %%
 %% API
 %%
--export([update_with_information_from_hex_pm/3]).
+-export([update_with_information_from_hex_pm/3,
+         get_registry/2]).
 
 %%
 %% Imports
@@ -41,6 +42,8 @@
 
 -define(CACHE_FILE, ".hex2nix.cache").
 -define(DEFAULT_CDN, "https://s3.amazonaws.com/s3.hex.pm/tarballs").
+-define(CACHE_REGISTRY_FILE, ".hex2nix.registry.cache").
+-define(DEFAULT_CDN, "http://s3.amazonaws.com/s3.hex.pm/tarballs").
 
 
 %% ============================================================================
@@ -66,10 +69,49 @@ update_with_information_from_hex_pm(true, AllApps, Deps) ->
 update_with_information_from_hex_pm(false, AllApps, Deps) ->
     update_with_information_from_hex_pm2(AllApps, [], Deps).
 
+-spec get_registry(boolean(), file:filename()) ->  [any()].
+get_registry(ShouldCache, HexRegistry) ->
+    RegistryFile =
+        case ShouldCache andalso filelib:is_regular(?CACHE_REGISTRY_FILE) of
+            false ->
+                TempDirectory = h2n_util:temp_directory(),
+                io:format("Pulling Hex Registry From ~s to ~s~n"
+                         , [HexRegistry, TempDirectory]),
+                {ok, "200", _, {file, GzippedFileName}} =
+                    ibrowse:send_req(HexRegistry
+                                    , []
+                                    , get
+                                    , []
+                                    , [{save_response_to_file,
+                                        filename:join(TempDirectory, "registry.ets.gz")}
+                                      | h2n_util:get_ibrowse_http_env()]),
+                {ok, RF} = decompress_file(GzippedFileName, TempDirectory),
+                case ShouldCache of
+                    true ->
+                        file:copy(RF, ?CACHE_REGISTRY_FILE);
+                    false -> ok
+                end,
+                RF;
+            true ->
+                ?CACHE_REGISTRY_FILE
+        end,
+    {ok, RegistryTable} = ets:file2tab(RegistryFile),
+    ets:tab2list(RegistryTable).
+
 
 %% ============================================================================
 %% Internal Functions
 %% ============================================================================
+
+-spec decompress_file(file:filename(), file:filename()) ->
+                             {ok, file:filename()}.
+decompress_file(GzippedFileName, TargetDirectory) ->
+    ResultFile = filename:join(TargetDirectory, "registry.ets"),
+    {ok, Data} = file:read_file(GzippedFileName),
+    UncompressedData = zlib:gunzip(Data),
+    file:write_file(ResultFile, UncompressedData, []),
+    io:format("File uncompressed to ~s~n", [ResultFile]),
+    {ok, ResultFile}.
 
 -spec update_with_information_from_hex_pm2(hex2nix:deps(),
                                            [dep_desc()],
