@@ -4,6 +4,7 @@
 %%% ---------------------------------------------------------------------------
 -module(h2n_util).
 
+-include_lib("ibrowse/include/ibrowse.hrl").
 
 %%
 %% API
@@ -20,11 +21,41 @@
         , cmd/1
         , run/2
         , cmd/2
+        , get_ibrowse_http_env/0
         ]).
 
 %% ============================================================================
 %% Exported Functions
 %% ============================================================================
+
+%% @doc
+%% This function gets environmental variables and translates them into
+%% ibrowse-compatible options.
+-spec get_ibrowse_http_env() -> [{atom(), term()}].
+get_ibrowse_http_env() ->
+    case os:getenv("http_proxy", "") of
+        "" ->
+            [];
+        ProxyUrlString ->
+            url_to_proxy_opts(ibrowse_lib:parse_url(ProxyUrlString))
+    end.
+
+-spec url_to_proxy_opts(#url{}) -> [{atom(), term()}].
+url_to_proxy_opts(#url{host = Host
+                      , port = Port
+                      , username = Username
+                      , password = Password}) ->
+    maybe_empty_kv(proxy_host, Host)
+        ++ maybe_empty_kv(proxy_port, Port)
+        ++ maybe_empty_kv(proxy_user, Username)
+        ++ maybe_empty_kv(proxy_password, Password).
+
+-spec maybe_empty_kv(term(),  term()) -> [{term(), term()}].
+maybe_empty_kv(_, undefined) ->
+    [];
+maybe_empty_kv(K, V) ->
+    [{K, V}].
+
 %% @doc
 %% Write the result of the format string out to stderr.
 -spec stderr(string(), [term()]) -> ok.

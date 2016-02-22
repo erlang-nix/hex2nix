@@ -120,7 +120,7 @@ get_app_detail_from_hex_pm(AppName) ->
                                 , [{"Accept", "application/json"}]
                                 , get
                                 , []
-                                , [])
+                                , h2n_util:get_ibrowse_http_env())
         end,
     {ok, "200", _, Body} =
         take_at_least_one_second(Thunk),
@@ -140,8 +140,8 @@ get_deep_meta_for_package(AppName, AppVsn) ->
                         , []
                         , get
                         , []
-                        , [{save_response_to_file,
-                            TargetPath}]),
+                        , [{save_response_to_file, TargetPath}
+                           | h2n_util:get_ibrowse_http_env()]),
     [Sha | _]  = string:tokens(h2n_util:cmd("sha256sum \"~s\"", [DownloadedPath]),
                                " "),
     io:format("Got Sha ~s for ~s~n", [Sha, Package]),
