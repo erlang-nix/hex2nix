@@ -64,7 +64,9 @@ update_with_information_from_hex_pm(true, AllApps, Deps) ->
                 []
         end,
     NewDeps = update_with_information_from_hex_pm2(AllApps, Cache, Deps),
-    ec_file:write_term(?CACHE_FILE, NewDeps),
+    %% Write back to cache with newer data earlier on the list, so
+    %% lists:keysearch will pick it up earlier.
+    ec_file:write_term(?CACHE_FILE, NewDeps ++ Cache),
     NewDeps;
 update_with_information_from_hex_pm(false, AllApps, Deps) ->
     update_with_information_from_hex_pm2(AllApps, [], Deps).
@@ -125,6 +127,7 @@ update_with_information_from_hex_pm2(AllApps, Cache, Deps) ->
                       io:format("Found ~s ~s details in cache.~n", [AppName, AppVsn]),
                       Cached;
                   false ->
+                      io:format("Fetching ~s ~s details from hex.pm.~n", [AppName, AppVsn]),
                       decorate_app(AllApps, AppDep)
               end
       end, Deps).
