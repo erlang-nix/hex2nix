@@ -84,7 +84,7 @@ app_body(Dep = #dep_desc{build_plugins = BuildPlugins}, Deps) ->
                    , build_plugins(BuildPlugins)
                    , erlang_deps(Deps)
                    , meta(Dep)]))
-        , text("}")]).
+        , text("} // packageOverrides)")]).
 
 -spec format_compile_port(h2n_fetcher:dep_desc()) -> prettypr:document().
 format_compile_port(#dep_desc{has_native_code = true}) ->
@@ -177,7 +177,7 @@ key_value_sep(Key, Value, Sep) ->
 section_header(Deps) ->
     sep([text("{ ")
         , nest(expand_arg_list([<<"buildRebar3">>,
-                                <<"fetchHex">> | Deps], ",", []))
+                                <<"packageOverrides ? {}">>, <<"fetchHex">> | Deps], ",", []))
         , text("}:")]).
 
 -spec expand_arg_list([binary()], string(), [prettypr:document()]) ->
@@ -207,7 +207,7 @@ header(Failing) ->
     Header = [text("/* hex-packages.nix is an auto-generated file -- DO NOT EDIT! */")
              , text("")
              , list_failing(Failing)
-             , blank_line(text("{ stdenv, callPackage, overrides ? (self: super: {}) }:"))
+             , blank_line(text("{ stdenv, pkgs, callPackage, overrides ? (self: super: {}) }:"))
              , text("let")],
     vertical_list(Header).
 
