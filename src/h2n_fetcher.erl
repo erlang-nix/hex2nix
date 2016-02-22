@@ -133,7 +133,7 @@ update_with_information_from_hex_pm2(AllApps, Cache, Deps) ->
 
 -spec decorate_app(hex2nix:deps(), {hex2nix:app(), [hex2nix:app()]}) ->
                           dep_desc().
-decorate_app(#indexed_deps{roots=Roots},
+decorate_app(#indexed_deps{roots=Roots} = AllApps,
              {App={AppName, AppVsn}, Deps}) ->
     IsRoot = case sets:is_element(App, Roots) of
                  true ->
@@ -143,7 +143,8 @@ decorate_app(#indexed_deps{roots=Roots},
              end,
     {Description, Licenses, Link} =
         get_metadata(AppName, get_app_detail_from_hex_pm(AppName)),
-    {Sha, HasNativeCode, BuildPlugins} = get_deep_meta_for_package(AppName, AppVsn),
+    {Sha, HasNativeCode, BuildPlugins} =
+        get_deep_meta_for_package(AppName, AppVsn, AllApps),
     #dep_desc{app = App
              , description = Description
              , position = IsRoot
@@ -170,9 +171,11 @@ get_app_detail_from_hex_pm(AppName) ->
         take_at_least_one_second(Thunk),
     jsx:decode(erlang:iolist_to_binary(Body)).
 
--spec get_deep_meta_for_package(hex2nix:app_name(), hex2nix:app_version()) ->
-                                 {sha(), boolean(), [hex2nix:app_name()]}.
-get_deep_meta_for_package(AppName, AppVsn) ->
+-spec get_deep_meta_for_package(hex2nix:app_name()
+                               , hex2nix:app_version()
+                               , hex2nix:deps())
+                               -> {sha(), boolean(), [hex2nix:app_name()]}.
+get_deep_meta_for_package(AppName, AppVsn, AllApps) ->
     TempDirectory = h2n_util:temp_directory(),
     Package = binary_to_list(<<AppName/binary, "-", AppVsn/binary, ".tar">>),
     TargetPath = filename:join(TempDirectory, Package),
@@ -189,11 +192,16 @@ get_deep_meta_for_package(AppName, AppVsn) ->
     [Sha | _]  = string:tokens(h2n_util:cmd("sha256sum \"~s\"", [DownloadedPath]),
                                " "),
     io:format("Got Sha ~s for ~s~n", [Sha, Package]),
-    {HasNativeCode, BuildPlugins} = has_native_code_and_plugins(TempDirectory, TargetPath),
+    {HasNativeCode, BuildPlugins} =
+        has_native_code_and_plugins(AppName, TempDirectory, TargetPath, AllApps),
     {erlang:list_to_binary(Sha), HasNativeCode, BuildPlugins}.
 
--spec has_native_code_and_plugins(file:filename(), file:filename()) -> {boolean(), [hex2nix:app_name()]}.
-has_native_code_and_plugins(TempDirectory, TargetPath) ->
+-spec has_native_code_and_plugins(hex2nix:app_name(),
+                                  file:filename(),
+                                  file:filename(),
+                                  hex2nix:deps())
+                                 -> {boolean(), [hex2nix:app_name()]}.
+has_native_code_and_plugins(AppName, TempDirectory, TargetPath, AllApps) ->
     ok = erl_tar:extract(TargetPath, [{cwd, TempDirectory}]),
     ContentsPath = filename:join(TempDirectory, "contents.tar.gz"),
     {ok, DirListing} = erl_tar:table(ContentsPath, [compressed]) ,
@@ -203,25 +211,71 @@ has_native_code_and_plugins(TempDirectory, TargetPath) ->
     ok = erl_tar:extract(ContentsPath, [{cwd, TempDirectory}
                                        , {files, ["rebar.config"]},
                                         compressed]),
-    {HasPortSpec, BuildPlugins} = analyze_rebar_config(TempDirectory),
+    {HasPortSpec, BuildPlugins0} = analyze_rebar_config(TempDirectory,
+                                                        DirListing),
+    BuildPlugins = filter_out_unknown_plugins(AppName, BuildPlugins0, AllApps),
     {HasCSrc orelse HasPortSpec, BuildPlugins}.
 
--spec analyze_rebar_config(file:filename()) -> {boolean(), [hex2nix:app_name()]}.
-analyze_rebar_config(TempDirectory) ->
+-spec analyze_rebar_config(file:filename(),
+                           [file:filename()]) ->
+                                  {boolean(), [hex2nix:app_name()]}.
+analyze_rebar_config(TempDirectory, DirListing) ->
     case file:consult(filename:join(TempDirectory, "rebar.config")) of
         {ok, Options} ->
-            BuildPlugins = lists:map(fun simplify_plugin/1,
-                                     proplists:get_value(plugins, Options, [])),
-            {lists:keymember("port_spec", 1, Options), BuildPlugins};
+            PluginDir = proplists:get_value(plugin_dir, Options, "src/"),
+            Plugins = proplists:get_value(plugins, Options, []),
+            BuildPlugins = filter_out_local_plugins(
+                             PluginDir,
+                             DirListing,
+                             lists:map(fun simplify_plugin/1,
+                                       Plugins)),
+            {compile_ports_heuristic(Options), BuildPlugins};
         _ ->
             {false, []}
     end.
 
--spec simplify_plugin(atom() | {atom(), any(), any()}) -> binary().
-simplify_plugin({Name, _Vsn}) when is_atom(Name) ->
-    atom_to_binary(Name, latin1);
+-spec filter_out_unknown_plugins(hex2nix:app_name(),
+                                 [hex2nix:app_name()],
+                                 hex2nix:deps())
+                                -> [hex2nix:app_name()].
+filter_out_unknown_plugins(AppName, BuildPlugins, #indexed_deps{index = All}) ->
+    {Good, Dropped} = lists:partition(
+                 fun(Plugin) ->
+                         dict:is_key(Plugin, All)
+                 end, BuildPlugins),
+    case Dropped of
+        [] -> ok;
+        _ ->
+            io:format("Filtered out unknown and non-local plugins ~s for ~p~n",
+                      [Dropped, AppName])
+    end,
+    Good.
+
+-spec filter_out_local_plugins(file:filename(),
+                               [file:filename()],
+                               [hex2nix:app_name()]) ->
+                                      [hex2nix:app_name()].
+filter_out_local_plugins(PluginDir, DirListing, BuildPlugins) ->
+    lists:filter(
+      fun(Plugin) ->
+              not lists:member(filename:join(PluginDir, binary_to_list(Plugin) ++ ".erl"),
+                               DirListing)
+      end, BuildPlugins).
+
+
+-spec compile_ports_heuristic([term()]) -> boolean().
+compile_ports_heuristic(Options) ->
+    lists:keymember("port_spec", 1, Options)
+        orelse lists:keymember("port_env", 1, Options)
+        orelse lists:keymember("port_sources", 1, Options).
+
+-spec simplify_plugin(atom()
+                      | {atom(), any()}
+                      | {atom(), any(), any()}) -> binary().
 simplify_plugin({Name, _Vsn, _Vcs}) when is_atom(Name) ->
-    atom_to_binary(Name, latin1);
+    simplify_plugin(Name);
+simplify_plugin({Name, _Vsn}) when is_atom(Name) ->
+    simplify_plugin(Name);
 simplify_plugin(Name) when is_atom(Name) ->
     atom_to_binary(Name, latin1).
 
