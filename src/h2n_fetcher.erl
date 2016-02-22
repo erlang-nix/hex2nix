@@ -41,7 +41,6 @@
 %%
 
 -define(CACHE_FILE, ".hex2nix.cache").
--define(DEFAULT_CDN, "https://s3.amazonaws.com/s3.hex.pm/tarballs").
 -define(CACHE_REGISTRY_FILE, ".hex2nix.registry.cache").
 -define(DEFAULT_CDN, "http://s3.amazonaws.com/s3.hex.pm/tarballs").
 
