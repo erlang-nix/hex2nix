@@ -22,7 +22,7 @@
 %% We almost never do this, however, with `prettypr` it actually makes
 %% some modicum of sense.
 -import(prettypr, [above/2, beside/2, sep/1, par/1, break/1,
-                   par/2, text_par/1, empty/0]).
+                   par/2, empty/0]).
 
 %% ============================================================================
 %% Exported Functions
@@ -120,16 +120,20 @@ meta(#dep_desc{description = Description
                      end]))
         , text("};")]).
 
+-spec nix_escape_string(binary()) -> binary().
+nix_escape_string(S) ->
+    re:replace(S, "(\\\\|\"|\\${)", "\\\\&", [global, {return, binary}]).
+
 -spec format_description(binary()) -> prettypr:document().
 format_description(<<"">>) ->
     empty();
 format_description(Description)
-  when erlang:size(Description) =< 80 ->
-    key_value_sep(<<"description">>, Description, "''");
+  when erlang:byte_size(Description) =< 80 ->
+    key_value(<<"description">>, nix_escape_string(Description));
 format_description(Description) ->
-    DescBody = erlang:iolist_to_binary(["''", Description, "'';"]),
+    DescBody = ["\"", nix_escape_string(Description), "\";"],
     break(follow(text(["longDescription", " ="])
-                , text_par(erlang:binary_to_list(DescBody)))).
+                , text_par(DescBody))).
 
 
 -spec format_licenses([binary()]) -> prettypr:document().
@@ -247,6 +251,11 @@ text(Data)
   when erlang:is_list(Data) ->
     prettypr:text(erlang:binary_to_list(erlang:iolist_to_binary(Data))).
 
+-spec text_par(iodata()) -> prettypr:document().
+text_par(Data)
+  when erlang:is_list(Data) ->
+    prettypr:text_par(erlang:binary_to_list(erlang:iolist_to_binary(Data))).
+
 -spec convert_vsn_to_name_part(hex2nix:app_version()) -> iolist().
 convert_vsn_to_name_part(Vsn) ->
     format_semver(ec_semver:parse(Vsn)).
@@ -254,7 +263,7 @@ convert_vsn_to_name_part(Vsn) ->
 -spec format_semver(ec_semver:semver()) -> iolist().
 format_semver({Maj, {AlphaPart, BuildPart}})
   when erlang:is_integer(Maj);
-              erlang:is_binary(Maj) ->
+       erlang:is_binary(Maj) ->
     [format_semver_version_part(Maj)
     , format_semver_vsn_rest(<<"_">>, AlphaPart)
     , format_semver_vsn_rest(<<"_">>, BuildPart)];
