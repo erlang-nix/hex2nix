@@ -174,6 +174,8 @@ analyze_rebar_config(TempDirectory) ->
     end.
 
 -spec simplify_plugin(atom() | {atom(), any(), any()}) -> binary().
+simplify_plugin({Name, _Vsn}) when is_atom(Name) ->
+    atom_to_binary(Name, latin1);
 simplify_plugin({Name, _Vsn, _Vcs}) when is_atom(Name) ->
     atom_to_binary(Name, latin1);
 simplify_plugin(Name) when is_atom(Name) ->
@@ -397,6 +399,7 @@ parse_license1(_Name, <<"agpl 3.0">>) -> <<"agpl3">>;
 parse_license1(_Name, <<"afl-2.1">>) -> <<"afl21">>;
 parse_license1(_Name, <<"afl 2.1">>) -> <<"afl21">>;
 parse_license1(_Name, <<"apache 2">>) -> <<"apsl20">>;
+parse_license1(_Name, <<"apache">>) -> <<"apsl20">>;
 parse_license1(_Name, <<"unlicense">>) -> <<"unlicense">>;
 parse_license1(_Name, <<"mozilla public license 1.1">>) -> <<"mpl11">>;
 parse_license1(_Name, <<"isc">>) -> <<"isc">>;
