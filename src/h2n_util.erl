@@ -46,8 +46,10 @@ iolist_to_list(Value) ->
                                 {ok, [{binary(), jsx:json_term()}]} | unconvertable.
 json_to_assoc_list(Value) when erlang:is_list(Value) ->
     {ok, Value};
-json_to_assoc_list(_) ->
-    unconvertable.
+json_to_assoc_list(null) ->
+    {ok, []};
+json_to_assoc_list(Unconvertable) ->
+    {unconvertable, Unconvertable}.
 
 -spec json_get_assoc_list(binary(), jsx:json_term()) ->
                                  {ok, [{binary(), jsx:json_term()}]}
