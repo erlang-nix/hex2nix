@@ -408,6 +408,7 @@ parse_license1(_Name, <<"mit">>) -> <<"mit">>;
 parse_license1(_Name, <<"bsd">>) -> <<"bsd3">>;
 parse_license1(_Name, <<"wtfpl">>) -> <<"wtfpl">>;
 parse_license1(_Name, <<"the mit license">>) -> <<"mit">>;
+parse_license1(_Name, <<"same as elixir">>) -> <<"asl20">>;
 parse_license1(Name, License) ->
     io:format("Unable to parse license ~s for ~s. Using "
               "'Unspecified free software license'~n", [License, Name]),

@@ -76,15 +76,10 @@ format_position(_, _, _) ->
     empty().
 
 -spec app_body(h2n_fetcher:dep_despc(), [binary()]) -> prettypr:document().
-app_body(Dep = #dep_desc{app = {Name, Vsn},
-                         build_plugins = BuildPlugins,
-                         sha = Sha},
-         Deps) ->
+app_body(Dep = #dep_desc{build_plugins = BuildPlugins}, Deps) ->
     erlang_deps(Deps),
-    par([break(sep([text("buildHex"), text("{")]))
-        , nest(par([key_value(<<"name">>, Name)
-                   , key_value(<<"version">>, Vsn)
-                   , key_value(<<"sha256">>, Sha)
+    par([break(sep([text("buildRebar3"), text("{")]))
+        , nest(par([src(Dep)
                    , format_compile_port(Dep)
                    , build_plugins(BuildPlugins)
                    , erlang_deps(Deps)
@@ -96,6 +91,18 @@ format_compile_port(#dep_desc{has_native_code = true}) ->
     break(follow(text(["compilePorts", " ="]), text("true;")));
 format_compile_port(_) ->
     empty().
+
+-spec src(h2n_fetcher:dep_despc()) -> prettypr:document().
+src(#dep_desc{app = {Name, Vsn},
+                         sha = Sha}) ->
+    par([sep([text("src")
+             , text("=")
+             , text("fetchHex")
+             , text("{")])
+        , nest(par([key_value(<<"name">>, Name)
+                   , key_value(<<"version">>, Vsn)
+                   , key_value(<<"sha256">>, Sha)]))
+        , text("};")]).
 
 -spec meta(h2n_fetcher:dep_despc()) -> prettypr:document().
 meta(#dep_desc{description = Description
@@ -160,8 +167,9 @@ key_value(Key, Value) ->
 
 -spec section_header([binary()]) -> prettypr:document().
 section_header(Deps) ->
-    sep([text("{")
-        , nest(expand_arg_list([<<"buildHex">> | Deps], ",", []))
+    sep([text("{ ")
+        , nest(expand_arg_list([<<"buildRebar3">>,
+                                <<"fetchHex">> | Deps], ",", []))
         , text("}:")]).
 
 -spec expand_arg_list([binary()], string(), [prettypr:document()]) ->
