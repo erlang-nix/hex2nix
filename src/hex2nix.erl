@@ -19,7 +19,7 @@
 %% Types
 %%
 -export_type([app/0, app_version/0, deps/0,
-              app_name/0]).
+              app_name/0, build_systems/0]).
 
 -type version_constraint() :: binary().
 
@@ -32,6 +32,7 @@
 
 -type deps() :: #indexed_deps{}.
 
+-type build_systems() :: mix | rebar3 | erlang_mk.
 %%
 %% Variables
 %%
@@ -102,6 +103,7 @@ do_main(Opts) ->
           h2n_fetcher:update_with_information_from_hex_pm(ShouldCache
                                                          , Detail
                                                          , h2n_resolver:resolve_dependencies(Detail))),
+
     write_nix_expressions(Deps, ordsets:new(), NixPkgsDir),
     case ShouldBuild of
         true ->
@@ -139,7 +141,7 @@ try_build_and_write_packages(#dep_desc{app = App} = Package, Failing, Deps, NixP
 -spec try_build(h2n_fetcher:dep_desc()) -> boolean().
 try_build(#dep_desc{app = App}) ->
     NixName = h2n_generate:format_name(App),
-    case h2n_util:run("nix-build $NIX_PATH/nixpkgs/ -A erlangPackages.~s", [NixName]) of
+    case h2n_util:run("nix-build $NIX_PATH/nixpkgs/ -A beamPackages.~s", [NixName]) of
         {ok, _} ->
             true;
         {error, Status, Out} ->
@@ -187,7 +189,7 @@ cleanup_app_data(Filter, AppData) ->
                         case (is_supported_build_system(BuildSystems) andalso
                               filter_by_name(Filter, App)) of
                             true ->
-                                dict:store(App, simplify_deps(Deps), Acc);
+                                dict:store(App, simplify_and_remove_duplicate_deps(Deps), Acc);
                             false ->
                                 Acc
                         end;
@@ -206,10 +208,19 @@ filter_by_name(Filter, App) ->
             false
     end.
 
--spec simplify_deps([[any()]]) ->
+-spec simplify_and_remove_duplicate_deps([[any()]]) ->
                            [app()].
-simplify_deps(Deps) ->
-    lists:map(fun simplify_dep/1, Deps).
+simplify_and_remove_duplicate_deps(Deps) ->
+    lists:foldl(fun (El0, Acc) ->
+                        El1 = simplify_dep(El0),
+                        case lists:keymember(Name, 1, Acc) of
+                            true ->
+                                Acc;
+                            false ->
+                                [ El1 | Acc ]
+                        end
+                end, [], Deps).
+
 
 -spec simplify_dep([app_name() | binary()]) ->
                           {app_name(), [binary()]}.
@@ -223,7 +234,9 @@ is_supported_build_system(SystemList)
 is_supported_build_system(<<"rebar3">>) -> true;
 is_supported_build_system(<<"make">>) ->  true;
 is_supported_build_system(<<"rebar">>) ->  true;
+is_supported_build_system(<<"mix">>) ->  true;
 is_supported_build_system(_) ->  false.
+
 
 -spec reduce_to_latest_buildable_version(dict:dict(app(), app_detail()),
                                          [{app_name(), [app_version()]}]) ->
@@ -272,7 +285,7 @@ simplify_dep_test() ->
 
 -spec filter_erlang_only_test() -> ok.
 filter_erlang_only_test() ->
-    ?assertEqual(false, is_supported_build_system(<<"mix">>)),
+    ?assertEqual(true, is_supported_build_system(<<"mix">>)),
     ?assertEqual(true, is_supported_build_system([<<"rebar3">>, <<"make">>])),
     ?assertEqual(true, is_supported_build_system([<<"rebar3">>, <<"hex">>])).
 

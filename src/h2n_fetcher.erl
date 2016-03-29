@@ -54,7 +54,7 @@
                                          [dep_desc()].
 update_with_information_from_hex_pm(true, AllApps, Deps) ->
     Cache =
-        case file:consult(?CACHE_FILE) of
+        case h2n_util:consult(?CACHE_FILE) of
             {ok, [CachedDeps]} ->
                 io:format("Loading available deps information from cache: ~s~n",
                           [?CACHE_FILE]),
@@ -119,12 +119,12 @@ decompress_file(GzippedFileName, TargetDirectory) ->
                                            [h2n_resolver:app_dep()]) ->
                                                   [dep_desc()].
 update_with_information_from_hex_pm2(AllApps, Cache, Deps) ->
-    lists:map(
+    lists:filtermap(
       fun (AppDep={App={AppName, AppVsn}, _Deps}) ->
               case lists:keysearch(App, #dep_desc.app, Cache) of
                   {value, Cached} ->
                       io:format("Found ~s ~s details in cache.~n", [AppName, AppVsn]),
-                      Cached;
+                      {true, Cached};
                   false ->
                       io:format("Fetching ~s ~s details from hex.pm.~n", [AppName, AppVsn]),
                       decorate_app(AllApps, AppDep)
@@ -132,7 +132,7 @@ update_with_information_from_hex_pm2(AllApps, Cache, Deps) ->
       end, Deps).
 
 -spec decorate_app(hex2nix:deps(), {hex2nix:app(), [hex2nix:app()]}) ->
-                          dep_desc().
+                          {true, dep_desc()} | false.
 decorate_app(#indexed_deps{roots=Roots} = AllApps,
              {App={AppName, AppVsn}, Deps}) ->
     IsRoot = case sets:is_element(App, Roots) of
@@ -143,17 +143,21 @@ decorate_app(#indexed_deps{roots=Roots} = AllApps,
              end,
     {Description, Licenses, Link} =
         get_metadata(AppName, get_app_detail_from_hex_pm(AppName)),
-    {Sha, HasNativeCode, BuildPlugins} =
-        get_deep_meta_for_package(AppName, AppVsn, AllApps),
-    #dep_desc{app = App
-             , description = Description
-             , position = IsRoot
-             , licenses = Licenses
-             , homepage = Link
-             , sha = Sha
-             , build_plugins = BuildPlugins
-             , has_native_code = HasNativeCode
-             , deps = Deps}.
+    case get_deep_meta_for_package(AppName, AppVsn, AllApps) of
+        {Sha, HasNativeCode, BuildPlugins, BuildTool} ->
+            {true, #dep_desc{app = App
+                            , description = Description
+                            , position = IsRoot
+                            , licenses = Licenses
+                            , homepage = Link
+                            , sha = Sha
+                            , build_plugins = BuildPlugins
+                            , has_native_code = HasNativeCode
+                            , build_tool = BuildTool
+                            , deps = Deps}};
+        no_metadata_available ->
+            false
+    end.
 
 -spec get_app_detail_from_hex_pm(binary()) -> jsx:json_term().
 get_app_detail_from_hex_pm(AppName) ->
@@ -173,8 +177,9 @@ get_app_detail_from_hex_pm(AppName) ->
 
 -spec get_deep_meta_for_package(hex2nix:app_name()
                                , hex2nix:app_version()
-                               , hex2nix:deps())
-                               -> {sha(), boolean(), [hex2nix:app_name()]}.
+                               , hex2nix:deps()) ->
+                                       {sha(), boolean(), [hex2nix:app_name()],
+                                        hex2nix:build_systems()} | no_metadata_available.
 get_deep_meta_for_package(AppName, AppVsn, AllApps) ->
     TempDirectory = h2n_util:temp_directory(),
     Package = binary_to_list(<<AppName/binary, "-", AppVsn/binary, ".tar">>),
@@ -182,19 +187,22 @@ get_deep_meta_for_package(AppName, AppVsn, AllApps) ->
     Url = h2n_util:iolist_to_list([?DEFAULT_CDN, "/", Package]),
     io:format("Pulling From ~s to ~s~n"
              , [Url, TargetPath]),
-    {ok, "200", _, {file, DownloadedPath}} =
-        ibrowse:send_req(Url
-                        , []
-                        , get
-                        , []
-                        , [{save_response_to_file, TargetPath}
-                           | h2n_util:get_ibrowse_http_env()]),
-    [Sha | _]  = string:tokens(h2n_util:cmd("sha256sum \"~s\"", [DownloadedPath]),
-                               " "),
-    io:format("Got Sha ~s for ~s~n", [Sha, Package]),
-    {HasNativeCode, BuildPlugins} =
-        has_native_code_and_plugins(AppName, TempDirectory, TargetPath, AllApps),
-    {erlang:list_to_binary(Sha), HasNativeCode, BuildPlugins}.
+    case ibrowse:send_req(Url
+                         , []
+                         , get
+                         , []
+                         , [{save_response_to_file,
+                             TargetPath}
+                            | h2n_util:get_ibrowse_http_env()]) of
+        {ok, "200", _, {file, DownloadedPath}} ->
+            [Sha | _]  = string:tokens(h2n_util:cmd("sha256sum \"~s\"", [DownloadedPath]),
+                                       " "),
+            {HasNativeCode, BuildPlugins, BuildTool} =
+                has_native_code_and_plugins(AppName, TempDirectory, TargetPath, AllApps),
+            {erlang:list_to_binary(Sha), HasNativeCode, BuildPlugins, BuildTool};
+        _ ->
+            no_metadata_available
+    end.
 
 -spec has_native_code_and_plugins(hex2nix:app_name(),
                                   file:filename(),
@@ -214,13 +222,40 @@ has_native_code_and_plugins(AppName, TempDirectory, TargetPath, AllApps) ->
     {HasPortSpec, BuildPlugins0} = analyze_rebar_config(TempDirectory,
                                                         DirListing),
     BuildPlugins = filter_out_unknown_plugins(AppName, BuildPlugins0, AllApps),
-    {HasCSrc orelse HasPortSpec, BuildPlugins}.
+    BuildTool  = get_build_tool(TempDirectory),
+    {HasCSrc orelse HasPortSpec, BuildPlugins, BuildTool}.
 
--spec analyze_rebar_config(file:filename(),
-                           [file:filename()]) ->
-                                  {boolean(), [hex2nix:app_name()]}.
+-spec get_build_tool(file:name()) -> hex2nix:build_systems().
+get_build_tool(MetadataDirectory) ->
+    {ok, Items} = h2n_util:consult(filename:join(MetadataDirectory, "metadata.config")),
+    case lists:keysearch(<<"build_tools">>, 1, Items) of
+        {value, {_, BuildTools}} ->
+            resolve_build_tool(BuildTools);
+        false ->
+            rebar3
+    end.
+
+-spec resolve_build_tool([binary()] | binary()) -> hex2nix:build_systems().
+resolve_build_tool(AppList) when erlang:is_list(AppList) ->
+    lists:foldl(fun resolve_build_tool/2, rebar3, AppList).
+
+-spec resolve_build_tool([binary()] | binary(), any()) -> hex2nix:build_systems().
+resolve_build_tool(<<"rebar3">>, rebar3) ->
+    rebar3;
+resolve_build_tool(<<"make">>, _) ->
+    erlang_mk;
+resolve_build_tool(<<"rebar">>, rebar3) ->
+    rebar3;
+resolve_build_tool(<<"mix">>, _) ->
+    mix;
+resolve_build_tool(<<"erlang.mk">>, _) ->
+    erlang_mk;
+resolve_build_tool(_, Current) ->
+    Current.
+
+-spec analyze_rebar_config(file:filename(), [file:filename()]) -> {boolean(), [hex2nix:app_name()]}.
 analyze_rebar_config(TempDirectory, DirListing) ->
-    case file:consult(filename:join(TempDirectory, "rebar.config")) of
+    case h2n_util:consult(filename:join(TempDirectory, "rebar.config")) of
         {ok, Options} ->
             PluginDir = proplists:get_value(plugin_dir, Options, "src/"),
             Plugins = proplists:get_value(plugins, Options, []),
@@ -303,7 +338,6 @@ get_description(Meta) ->
             none
     end.
 
-
 -spec parse_links(binary(),
                   {ok, [{binary(), jsx:json_term()}] | jsx:json_term()} | false) ->
                          link().
@@ -376,7 +410,6 @@ parse_license0(Name, _) ->
               "'Unspecified free software license'~n", [Name]),
     <<"free">>.
 
-
 -spec parse_license1(hex2nix:app_name(), binary()) -> license().
 parse_license1(_Name, <<"zpl-2.1">>) -> <<"zpt21">>;
 parse_license1(_Name, <<"zpl 2.1">>) -> <<"zpt21">>;
@@ -424,18 +457,19 @@ parse_license1(_Name, <<"llgpl-2.1">>) -> <<"llgpl21">>;
 parse_license1(_Name, <<"llgpl 2.1">>) -> <<"llgpl21">>;
 parse_license1(_Name, <<"libtiff">>) -> <<"libtiff">>;
 parse_license1(_Name, <<"libpng">>) -> <<"libpng">>;
-parse_license1(_Name, <<"lgpl-3.0+">>) -> <<"lgpl3Plus">>;
-parse_license1(_Name, <<"lgpl 3.0+">>) -> <<"lgpl3Plus">>;
-parse_license1(_Name, <<"lgpl-3.0">>) -> <<"lgpl3">>;
-parse_license1(_Name, <<"lgpl 3.0">>) -> <<"lgpl3">>;
-parse_license1(_Name, <<"lgpl-2.1+">>) -> <<"lgpl21Plus">>;
-parse_license1(_Name, <<"lgpl 2.1+">>) -> <<"lgpl21Plus">>;
-parse_license1(_Name, <<"lgpl-2.1">>) -> <<"lgpl21">>;
-parse_license1(_Name, <<"lgpl 2.1">>) -> <<"lgpl21">>;
-parse_license1(_Name, <<"lgpl-2.0+">>) -> <<"lgpl2Plus">>;
-parse_license1(_Name, <<"lgpl 2.0+">>) -> <<"lgpl2Plus">>;
-parse_license1(_Name, <<"lgpl-2.0">>) -> <<"lgpl2">>;
-parse_license1(_Name, <<"lgpl 2.0">>) -> <<"lgpl2">>;
+parse_license1(_Name, <<"lgpl-3.0+">>) -> <<"lpgl3Plus">>;
+parse_license1(_Name, <<"lgpl 3.0+">>) -> <<"lpgl3Plus">>;
+parse_license1(_Name, <<"lgpl-3.0">>) -> <<"lpgl3">>;
+parse_license1(_Name, <<"lgpl 3.0">>) -> <<"lpgl3">>;
+parse_license1(_Name, <<"lgpl">>) -> <<"lpgl3">>;
+parse_license1(_Name, <<"lgpl-2.1+">>) -> <<"lpgl21Plus">>;
+parse_license1(_Name, <<"lgpl 2.1+">>) -> <<"lpgl21Plus">>;
+parse_license1(_Name, <<"lgpl-2.1">>) -> <<"lpgl1">>;
+parse_license1(_Name, <<"lgpl 2.1">>) -> <<"lpgl1">>;
+parse_license1(_Name, <<"lgpl-2.0+">>) -> <<"lpgl2Plus">>;
+parse_license1(_Name, <<"lgpl 2.0+">>) -> <<"lpgl2Plus">>;
+parse_license1(_Name, <<"lgpl-2.0">>) -> <<"lpgl2">>;
+parse_license1(_Name, <<"lgpl 2.0">>) -> <<"lpgl2">>;
 parse_license1(_Name, <<"ipl-1.0">>) -> <<"ipl10">>;
 parse_license1(_Name, <<"ipl 1.0">>) -> <<"ipl10">>;
 parse_license1(_Name, <<"IPA">>) -> <<"ipa">>;
@@ -444,6 +478,8 @@ parse_license1(_Name, <<"iasl">>) -> <<"iasl">>;
 parse_license1(_Name, <<"gpl-3.0+">>) -> <<"gpl3Plus">>;
 parse_license1(_Name, <<"gpl 3.0+">>) -> <<"gpl3Plus">>;
 parse_license1(_Name, <<"gpl-3.0">>) -> <<"gpl3">>;
+parse_license1(_Name, <<"gnu gplv3">>) -> <<"gpl3">>;
+parse_license1(_Name, <<"gpl">>) -> <<"gpl3">>;
 parse_license1(_Name, <<"gpl 3.0">>) -> <<"gpl3">>;
 parse_license1(_Name, <<"gpl-2.0+">>) -> <<"gpl2Plus">>;
 parse_license1(_Name, <<"gpl 2.0+">>) -> <<"gpl2Plus">>;
@@ -455,6 +491,7 @@ parse_license1(_Name, <<"gfdl-1.2">>) -> <<"fdl12">>;
 parse_license1(_Name, <<"gfdl 1.2">>) -> <<"fdl12">>;
 parse_license1(_Name, <<"epl-1.0">>) -> <<"epl10">>;
 parse_license1(_Name, <<"epl 1.0">>) -> <<"epl10">>;
+parse_license1(_Name, <<"epl 1.1">>) -> <<"epl10">>;
 parse_license1(_Name, <<"efl-2.0">>) -> <<"efl20">>;
 parse_license1(_Name, <<"efl 2.0">>) -> <<"efl20">>;
 parse_license1(_Name, <<"efl-1.0">>) -> <<"efl10">>;
@@ -479,14 +516,23 @@ parse_license1(_Name, <<"cc-by-sa-2.5">>) -> <<"cc-by-sa-25">>;
 parse_license1(_Name, <<"cc by sa 2.5">>) -> <<"cc-by-sa-25">>;
 parse_license1(_Name, <<"cc0-1.0">>) -> <<"cc0">>;
 parse_license1(_Name, <<"cc0 1.0">>) -> <<"cc0">>;
+parse_license1(_Name, <<"cc0">>) -> <<"cc0">>;
 parse_license1(_Name, <<"bsd-3">>) -> <<"bsd3">>;
 parse_license1(_Name, <<"bsd 3">>) -> <<"bsd3">>;
+parse_license1(_Name, <<"bsd 3.0">>) -> <<"bsd3">>;
+parse_license1(_Name, <<"the bsd 3-clause license">>) -> <<"bsd3">>;
+parse_license1(_Name, <<"bsd 3-clause">>) -> <<"bsd3">>;
 parse_license1(_Name, <<"bsd-2">>) -> <<"bsd2">>;
 parse_license1(_Name, <<"bsd 2">>) -> <<"bsd2">>;
+parse_license1(_Name, <<"bsd-2 clause">>) -> <<"bsd2">>;
+parse_license1(_Name, <<"simplified bsd">>) -> <<"bsd2">>;
 parse_license1(_Name, <<"bsl-1.0">>) -> <<"boost">>;
+parse_license1(_Name, <<"apache license 2.0">>) -> <<"asl20">>;
 parse_license1(_Name, <<"bsl 1.0">>) -> <<"boost">>;
 parse_license1(_Name, <<"apache-2.0">>) -> <<"asl20">>;
 parse_license1(_Name, <<"apache 2.0">>) -> <<"asl20">>;
+parse_license1(_Name, <<"apache v2.0">>) -> <<"asl20">>;
+parse_license1(_Name, <<"apl 2.0">>) -> <<"asl20">>;
 parse_license1(_Name, <<"artistic-1.0">>) -> <<"artistic1">>;
 parse_license1(_Name, <<"artistic 1.0">>) -> <<"artistic1">>;
 parse_license1(_Name, <<"artistic">>) -> <<"artistic1">>;
@@ -500,14 +546,17 @@ parse_license1(_Name, <<"apache 2">>) -> <<"apsl20">>;
 parse_license1(_Name, <<"apache">>) -> <<"apsl20">>;
 parse_license1(_Name, <<"unlicense">>) -> <<"unlicense">>;
 parse_license1(_Name, <<"mozilla public license 1.1">>) -> <<"mpl11">>;
+parse_license1(_Name, <<"mozilla public license version 2.0">>) -> <<"mpl20">>;
 parse_license1(_Name, <<"isc">>) -> <<"isc">>;
-parse_license1(_Name, <<"the mit License (mit)">>) -> <<"mit">>;
-parse_license1(_Name, <<"mit License">>) -> <<"mit">>;
+parse_license1(_Name, <<"the mit license (mit)">>) -> <<"mit">>;
+parse_license1(_Name, <<"mit license">>) -> <<"mit">>;
 parse_license1(_Name, <<"gpl (for code)">>) -> <<"gpl3">>;
 parse_license1(_Name, <<"bsd (for code)">>) -> <<"bsd3">>;
 parse_license1(_Name, <<"mit">>) -> <<"mit">>;
 parse_license1(_Name, <<"bsd">>) -> <<"bsd3">>;
 parse_license1(_Name, <<"wtfpl">>) -> <<"wtfpl">>;
+parse_license1(_Name, <<"do what the fuck you want to public license (wtfpl)">>) -> <<"wtfpl">>;
+parse_license1(_Name, <<"do what the f*ck you want">>) -> <<"wtfpl">>;
 parse_license1(_Name, <<"the mit license">>) -> <<"mit">>;
 parse_license1(_Name, <<"same as elixir">>) -> <<"asl20">>;
 parse_license1(Name, License) ->

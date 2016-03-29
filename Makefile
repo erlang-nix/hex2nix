@@ -8,11 +8,12 @@ BIN := "$(PREFIX)/bin"
 # =============================================================================
 # Rules
 # =============================================================================
-.PHONY= all test clean repl shell build test analyze bootstrap install
+.PHONY= all test clean repl shell build test analyze configure install
 
 all: test
 
 clean:
+	rm -rf rebar.lock
 	rm -rf _build
 	rm -rf .cache
 
@@ -22,16 +23,16 @@ repl:
 shell:
 	nix-shell --run "bash"
 
-bootstrap:
-	nix-shell --pure --run "rebar3-nix-bootstrap"
+configure:
+	nix-shell --pure --command 'eval "$$configurePhase"; echo $?'
 
-build: bootstrap
-	nix-shell --pure --run "TERM=dumb HOME=$(CURDIR) rebar3 escriptize"
+build: configure
+	nix-shell --pure --command 'eval "$$buildPhase"'
 
 analyze: bootstrap
 	nix-shell --pure --run "TERM=dumb HOME=$(CURDIR) rebar3 do escriptize,dialyzer"
 
-test: bootstrap
+test: build
 	nix-shell --pure --run "TERM=dumb HOME=$(CURDIR) rebar3 do escriptize,dialyzer,eunit"
 
 install:

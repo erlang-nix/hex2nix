@@ -56,6 +56,7 @@ create_body(Deps) ->
 -spec create_dep(h2n_fetcher:dep_desc()) -> prettypr:document().
 create_dep(Dep = #dep_desc{app = {Name, Vsn}
                           , position = Position
+                          , build_tool = Tool
                           , deps = Deps0}) ->
     NixName = format_name(Name, Vsn),
     Deps1 = lists:map(fun({DepName, DepVsn}) ->
@@ -63,7 +64,7 @@ create_dep(Dep = #dep_desc{app = {Name, Vsn}
                      end, Deps0),
     above(blank_line(above(sep([text(NixName), text("="), text("callPackage")])
                           , nest(par([text("(")
-                                     , nest(par([section_header(Deps1)
+                                     , nest(par([section_header(Tool, Deps1)
                                                 , nest(app_body(Dep, Deps1))]))
                                      , text(") {};")])))),
           format_position(Name, NixName, Position)).
@@ -76,13 +77,34 @@ format_position(_, _, _) ->
     empty().
 
 -spec app_body(h2n_fetcher:dep_despc(), [binary()]) -> prettypr:document().
-app_body(Dep = #dep_desc{build_plugins = BuildPlugins}, Deps) ->
-    erlang_deps(Deps),
-    par([break(sep([text("buildRebar3"), text("{")]))
-        , nest(par([src(Dep)
+app_body(Dep = #dep_desc{app = {Name, Vsn}
+                        , build_plugins = BuildPlugins
+                        , build_tool = rebar3}, Deps) ->
+    par([break(sep([text("buildRebar3"), text("({")]))
+        , nest(par([key_value(<<"name">>, Name)
+                   , key_value(<<"version">>, Vsn)
+                   , src(Dep)
                    , format_compile_port(Dep)
                    , build_plugins(BuildPlugins)
-                   , erlang_deps(Deps)
+                   , beam_deps(Deps)
+                   , meta(Dep)]))
+        , text("} // packageOverrides)")]);
+app_body(Dep = #dep_desc{app = {Name, Vsn}
+                        , build_tool = mix}, Deps) ->
+    par([break(sep([text("buildMix"), text("({")]))
+        , nest(par([key_value(<<"name">>, Name)
+                   , key_value(<<"version">>, Vsn)
+                   , src(Dep)
+                   , beam_deps(Deps)
+                   , meta(Dep)]))
+        , text("} // packageOverrides)")]);
+app_body(Dep = #dep_desc{app = {Name, Vsn}
+                        , build_tool = erlang_mk}, Deps) ->
+    par([break(sep([text("buildErlangMk"), text("({")]))
+        , nest(par([key_value(<<"name">>, Name)
+                   , key_value(<<"version">>, Vsn)
+                   , src(Dep)
+                   , beam_deps(Deps)
                    , meta(Dep)]))
         , text("} // packageOverrides)")]).
 
@@ -94,12 +116,12 @@ format_compile_port(_) ->
 
 -spec src(h2n_fetcher:dep_despc()) -> prettypr:document().
 src(#dep_desc{app = {Name, Vsn},
-                         sha = Sha}) ->
+              sha = Sha}) ->
     par([sep([text("src")
              , text("=")
              , text("fetchHex")
              , text("{")])
-        , nest(par([key_value(<<"name">>, Name)
+        , nest(par([key_value(<<"pkg">>, Name)
                    , key_value(<<"version">>, Vsn)
                    , key_value(<<"sha256">>, Sha)]))
         , text("};")]).
@@ -125,16 +147,21 @@ nix_escape_string(S) ->
     re:replace(S, "(\\\\|\"|\\${)", "\\\\&", [global, {return, binary}]).
 
 -spec format_description(binary()) -> prettypr:document().
+format_description(none) ->
+    empty();
 format_description(<<"">>) ->
     empty();
-format_description(Description)
-  when erlang:byte_size(Description) =< 80 ->
-    key_value(<<"description">>, nix_escape_string(Description));
 format_description(Description) ->
-    DescBody = ["\"", nix_escape_string(Description), "\";"],
-    break(follow(text(["longDescription", " ="])
-                , text_par(DescBody))).
+    DescBody = erlang:iolist_to_binary(["''", escape_description(Description), "'';"]),
+    break(follow(text([description_key(Description), " ="])
+                , text_par(erlang:binary_to_list(DescBody)))).
 
+-spec description_key(binary()) -> string().
+description_key(Description)
+  when erlang:size(Description) =< 80 ->
+    "description";
+description_key(_) ->
+    "longDescription".
 
 -spec format_licenses([binary()]) -> prettypr:document().
 format_licenses([]) ->
@@ -152,9 +179,9 @@ format_licenses(Values) ->
 build_plugins(Deps) ->
     key_list("buildPlugins", Deps).
 
--spec erlang_deps([binary()]) -> prettypr:document().
-erlang_deps(Deps) ->
-    key_list("erlangDeps", Deps).
+-spec beam_deps([binary()]) -> prettypr:document().
+beam_deps(Deps) ->
+    key_list("beamDeps", Deps).
 
 -spec key_list(iolist(), [binary()]) -> prettypr:document().
 key_list(_Key, []) ->
@@ -173,11 +200,24 @@ key_value(Key, Value) ->
 key_value_sep(Key, Value, Sep) ->
     break(follow(text([Key, " ="]), text([Sep, Value, Sep, ";"]))).
 
--spec section_header([binary()]) -> prettypr:document().
-section_header(Deps) ->
+-spec section_header(hex2nix:build_tool(), [binary()]) -> prettypr:document().
+section_header(rebar3, Deps) ->
     sep([text("{ ")
         , nest(expand_arg_list([<<"buildRebar3">>,
-                                <<"packageOverrides ? {}">>, <<"fetchHex">> | Deps], ",", []))
+                                <<"packageOverrides ? {}">>,
+                                <<"fetchHex">> | Deps], ",", []))
+        , text("}:")]);
+section_header(mix, Deps) ->
+    sep([text("{ ")
+        , nest(expand_arg_list([<<"buildMix">>,
+                                <<"packageOverrides ? {}">>,
+                                <<"fetchHex">> | Deps], ",", []))
+        , text("}:")]);
+section_header(erlang_mk, Deps) ->
+    sep([text("{ ")
+        , nest(expand_arg_list([<<"buildErlangMk">>,
+                                <<"packageOverrides ? {}">>,
+                                <<"fetchHex">> | Deps], ",", []))
         , text("}:")]).
 
 -spec expand_arg_list([binary()], string(), [prettypr:document()]) ->
@@ -306,3 +346,7 @@ format_semver_vsn_rest(_TypeMark, []) ->
 format_semver_vsn_rest(TypeMark, [Head | Rest]) ->
     [TypeMark, Head |
      [["_", to_list(Detail)] || Detail <- Rest]].
+
+-spec escape_description(binary()) -> binary().
+escape_description(Desc) ->
+    nix_escape_string(re:replace(Desc, <<"'">>, <<"`">>, [global])).
