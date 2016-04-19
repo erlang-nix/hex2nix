@@ -11,4 +11,5 @@
                    sha :: h2n_fetcher:sha(),
                    has_native_code :: boolean(),
                    build_plugins :: [hex2nix:app_name()],
+                   build_tool :: hex2nix:build_systems(),
                    deps :: [hex2nix:app()]}).

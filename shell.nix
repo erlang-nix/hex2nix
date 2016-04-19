@@ -9,9 +9,9 @@ let
         name = "hex2nix";
         version = "0.0.2";
         src = ./.;
-        erlangDeps = [ ibrowse jsx erlware_commons getopt ];
+        beamDeps = [ ibrowse jsx erlware_commons getopt ];
       };
-  drv = erlangPackages.callPackage f {};
+  drv = beamPackages.callPackage f {};
 
 in
  drv
