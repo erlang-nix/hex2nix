@@ -212,7 +212,7 @@ filter_by_name(Filter, App) ->
                            [app()].
 simplify_and_remove_duplicate_deps(Deps) ->
     lists:foldl(fun (El0, Acc) ->
-                        El1 = simplify_dep(El0),
+                        El1 = {Name, _} = simplify_dep(El0),
                         case lists:keymember(Name, 1, Acc) of
                             true ->
                                 Acc;
