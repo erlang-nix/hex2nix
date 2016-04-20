@@ -36,7 +36,6 @@ test: build
 	nix-shell --pure --run "TERM=dumb HOME=$(CURDIR) rebar3 do escriptize,dialyzer,eunit"
 
 install:
-	rebar3-nix-bootstrap
 	HOME=$(CURDIR) rebar3 escriptize
 	mkdir -p "$(BIN)"
 	cp "$(CURDIR)/_build/default/bin/hex2nix" "$(BIN)"
