@@ -21,7 +21,7 @@
 -export_type([app_dep/0]).
 
 -type app_dep() :: {hex2nix:app(), [hex2nix:app()]}.
--type constraint() :: '>' | '~>' | '>=' | '='.
+-type constraint() :: '>' | '~>' | '<=' | '>=' | '='.
 
 -include("hex2nix.hrl").
 
@@ -126,6 +126,9 @@ update_deps_list(Deps, AppDeps) ->
                             <<"=", Vsn/binary>> ->
                                 find_highest_matching_0(Deps, Dep, '=',
                                                         Vsn, DepsListAcc);
+                            <<"<=", Vsn/binary>> ->
+                                find_highest_matching_0(Deps, Dep, '<=',
+                                                        Vsn, DepsListAcc);
                             <<">=", Vsn/binary>> ->
                                 find_highest_matching_0(Deps, Dep, '>=',
                                                         Vsn, DepsListAcc);
@@ -158,7 +161,7 @@ update_deps_list(Deps, AppDeps) ->
 %% `~> 2.1.3-dev` | `>= 2.1.3-dev and < 2.2.0`
 %% `~> 2.0` | `>= 2.0.0 and < 3.0.0`
 %% `~> 2.1` | `>= 2.1.0 and < 3.0.0`
--spec find_highest_matching_1(hex2nix:deps(), binary(), '>' | '~>' | '>=' | '=', binary()) ->
+-spec find_highest_matching_1(hex2nix:deps(), binary(), '>' | '~>' | '<=' | '>=' | '=', binary()) ->
                                    {ok, binary()} | none.
 find_highest_matching_1(#indexed_deps{index = Index}, Name, MatchType, Constraint) ->
     case dict:find(Name, Index) of
@@ -167,21 +170,24 @@ find_highest_matching_1(#indexed_deps{index = Index}, Name, MatchType, Constrain
         {ok, [HeadVsn | VsnTail]} ->
             {ok, handle_vsns(Constraint, MatchType, HeadVsn, VsnTail)};
         error ->
+            io:format("!!! HERE ~p: ~p~n", [?LINE, Name]),
             erlang:throw({missing_dependency, MatchType, {Name, Constraint}})
     end.
 
--spec matches('>' | '~>' | '>=' | '=', binary(), binary(), binary()) -> boolean().
+-spec matches('>' | '~>' | '<=' | '>=' | '=', binary(), binary(), binary()) -> boolean().
 matches('~>', Constraint, Version, Highest) ->
     ec_semver:pes(Version, Constraint) andalso
         ec_semver:gt(Version, Highest);
 matches('>', _Constraint, Version, Highest) ->
     ec_semver:gt(Version, Highest);
+matches('<=', _Constraint, Version, Highest) ->
+    ec_semver:lte(Version, Highest);
 matches('>=', _Constraint, Version, Highest) ->
     ec_semver:gte(Version, Highest);
 matches('=', _Constraint, Version, Highest) ->
     ec_semver:eql(Version, Highest).
 
--spec handle_vsns(binary(), '>' | '~>' | '>=' | '=' , binary(), [binary()]) -> binary().
+-spec handle_vsns(binary(), '>' | '~>' | '<=' | '>=' | '=' , binary(), [binary()]) -> binary().
 handle_vsns(Constraint, MatchType, HeadVsn, VsnTail) ->
     lists:foldl(fun(Version, Highest) ->
                         case  matches(MatchType
@@ -195,11 +201,13 @@ handle_vsns(Constraint, MatchType, HeadVsn, VsnTail) ->
                         end
                 end, HeadVsn, VsnTail).
 
--spec matches_single('>' | '~>' | '>=' | '=', binary(), binary()) -> boolean().
+-spec matches_single('>' | '~>' | '<=' | '>=' | '=', binary(), binary()) -> boolean().
 matches_single('~>', Vsn, Constraint) ->
     ec_semver:pes(Vsn, Constraint);
 matches_single('>', Vsn, Constraint) ->
     ec_semver:gt(Vsn, Constraint);
+matches_single('<=', Vsn, Constraint) ->
+    ec_semver:lte(Vsn, Constraint);
 matches_single('>=', Vsn, Constraint) ->
     ec_semver:gte(Vsn, Constraint);
 matches_single('=', Vsn, Constraint) ->
