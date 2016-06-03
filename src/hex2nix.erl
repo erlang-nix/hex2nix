@@ -141,7 +141,7 @@ try_build_and_write_packages(#dep_desc{app = App} = Package, Failing, Deps, NixP
 -spec try_build(h2n_fetcher:dep_desc()) -> boolean().
 try_build(#dep_desc{app = App}) ->
     NixName = h2n_generate:format_name(App),
-    case h2n_util:run("nix-build $NIX_PATH/nixpkgs/ -A beamPackages.~s", [NixName]) of
+    case h2n_util:run("nix-build $(nix-instantiate --find-file nixpkgs/) -A beamPackages.~s", [NixName]) of
         {ok, _} ->
             true;
         {error, Status, Out} ->
