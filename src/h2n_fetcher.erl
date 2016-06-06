@@ -209,7 +209,8 @@ get_deep_meta_for_package(AppName, AppVsn, AllApps) ->
             {HasNativeCode, BuildPlugins, BuildTool} =
                 has_native_code_and_plugins(AppName, TempDirectory, TargetPath, AllApps),
             {erlang:list_to_binary(Sha), HasNativeCode, BuildPlugins, BuildTool};
-        _ ->
+        Result ->
+            io:format("Unable to resolve tarball for ~p at ~s got ~p~n", [Package, Url, Result]),
             no_metadata_available
     end.
 
