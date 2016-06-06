@@ -172,8 +172,16 @@ get_app_detail_from_hex_pm(AppName) ->
                                 , []
                                 , h2n_util:get_ibrowse_http_env())
         end,
-    {ok, "200", _, Body} =
-        take_at_least_one_second(Thunk),
+    {ok, Body} = case take_at_least_one_second(Thunk) of
+                     {ok, "200", _, Body0} ->
+                         {ok, Body0};
+                     {error, req_timedout} ->
+                         {ok, "200", _, Body0} = take_at_least_one_second(Thunk),
+                         {ok, Body0};
+                     {conn_failed, {error, nxdomain}}  ->
+                         {ok, "200", _, Body0} = take_at_least_one_second(Thunk),
+                         {ok, Body0}
+           end,
     jsx:decode(erlang:iolist_to_binary(Body)).
 
 -spec get_deep_meta_for_package(hex2nix:app_name()
