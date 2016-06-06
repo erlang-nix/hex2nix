@@ -42,7 +42,7 @@
 
 -define(CACHE_FILE, ".hex2nix.cache").
 -define(CACHE_REGISTRY_FILE, ".hex2nix.registry.cache").
--define(DEFAULT_CDN, "http://s3.amazonaws.com/s3.hex.pm/tarballs").
+-define(DEFAULT_CDN, "https://repo.hex.pm").
 
 
 %% ============================================================================
@@ -62,10 +62,11 @@ update_with_information_from_hex_pm(true, AllApps, Deps) ->
             _ ->
                 []
         end,
+
     NewDeps = update_with_information_from_hex_pm2(AllApps, Cache, Deps),
     %% Write back to cache with newer data earlier on the list, so
     %% lists:keysearch will pick it up earlier.
-    ec_file:write_term(?CACHE_FILE, NewDeps ++ Cache),
+    ok = ec_file:write_term(?CACHE_FILE, NewDeps ++ Cache),
     NewDeps;
 update_with_information_from_hex_pm(false, AllApps, Deps) ->
     update_with_information_from_hex_pm2(AllApps, [], Deps).
@@ -184,7 +185,7 @@ get_deep_meta_for_package(AppName, AppVsn, AllApps) ->
     TempDirectory = h2n_util:temp_directory(),
     Package = binary_to_list(<<AppName/binary, "-", AppVsn/binary, ".tar">>),
     TargetPath = filename:join(TempDirectory, Package),
-    Url = h2n_util:iolist_to_list([?DEFAULT_CDN, "/", Package]),
+    Url = h2n_util:iolist_to_list([?DEFAULT_CDN, "/tarballs/", Package]),
     io:format("Pulling From ~s to ~s~n"
              , [Url, TargetPath]),
     case ibrowse:send_req(Url
