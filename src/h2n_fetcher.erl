@@ -356,7 +356,11 @@ parse_links(Name, {ok, Links})
                                                 {h2n_util:binary_to_lower(Key)
                                                 , Link}
                                      end,
-                                     Links));
+                                     %% Filter out broken links
+                                     lists:filter(fun({_,_}) -> true;
+                                                     (_) -> false
+                                                  end,
+                                                  Links)));
 parse_links(Name, false) ->
     io:format("No homepage link for ~s~n", [Name]),
     no_source.
