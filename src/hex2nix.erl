@@ -32,7 +32,7 @@
 
 -type deps() :: #indexed_deps{}.
 
--type build_systems() :: mix | rebar3 | erlang_mk.
+-type build_systems() :: mix | rebar3 | erlang_mk | make.
 %%
 %% Variables
 %%
