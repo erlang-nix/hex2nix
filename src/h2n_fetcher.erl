@@ -42,7 +42,7 @@
 
 -define(CACHE_FILE, ".hex2nix.cache").
 -define(CACHE_REGISTRY_FILE, ".hex2nix.registry.cache").
--define(DEFAULT_CDN, "http://s3.amazonaws.com/s3.hex.pm/tarballs").
+-define(DEFAULT_CDN, "https://repo.hex.pm").
 
 
 %% ============================================================================
@@ -62,10 +62,11 @@ update_with_information_from_hex_pm(true, AllApps, Deps) ->
             _ ->
                 []
         end,
+
     NewDeps = update_with_information_from_hex_pm2(AllApps, Cache, Deps),
     %% Write back to cache with newer data earlier on the list, so
     %% lists:keysearch will pick it up earlier.
-    ec_file:write_term(?CACHE_FILE, NewDeps ++ Cache),
+    ok = ec_file:write_term(?CACHE_FILE, NewDeps ++ Cache),
     NewDeps;
 update_with_information_from_hex_pm(false, AllApps, Deps) ->
     update_with_information_from_hex_pm2(AllApps, [], Deps).
@@ -171,8 +172,16 @@ get_app_detail_from_hex_pm(AppName) ->
                                 , []
                                 , h2n_util:get_ibrowse_http_env())
         end,
-    {ok, "200", _, Body} =
-        take_at_least_one_second(Thunk),
+    {ok, Body} = case take_at_least_one_second(Thunk) of
+                     {ok, "200", _, Body0} ->
+                         {ok, Body0};
+                     {error, req_timedout} ->
+                         {ok, "200", _, Body0} = take_at_least_one_second(Thunk),
+                         {ok, Body0};
+                     {conn_failed, {error, nxdomain}}  ->
+                         {ok, "200", _, Body0} = take_at_least_one_second(Thunk),
+                         {ok, Body0}
+           end,
     jsx:decode(erlang:iolist_to_binary(Body)).
 
 -spec get_deep_meta_for_package(hex2nix:app_name()
@@ -184,7 +193,7 @@ get_deep_meta_for_package(AppName, AppVsn, AllApps) ->
     TempDirectory = h2n_util:temp_directory(),
     Package = binary_to_list(<<AppName/binary, "-", AppVsn/binary, ".tar">>),
     TargetPath = filename:join(TempDirectory, Package),
-    Url = h2n_util:iolist_to_list([?DEFAULT_CDN, "/", Package]),
+    Url = h2n_util:iolist_to_list([?DEFAULT_CDN, "/tarballs/", Package]),
     io:format("Pulling From ~s to ~s~n"
              , [Url, TargetPath]),
     case ibrowse:send_req(Url
@@ -200,7 +209,8 @@ get_deep_meta_for_package(AppName, AppVsn, AllApps) ->
             {HasNativeCode, BuildPlugins, BuildTool} =
                 has_native_code_and_plugins(AppName, TempDirectory, TargetPath, AllApps),
             {erlang:list_to_binary(Sha), HasNativeCode, BuildPlugins, BuildTool};
-        _ ->
+        Result ->
+            io:format("Unable to resolve tarball for ~p at ~s got ~p~n", [Package, Url, Result]),
             no_metadata_available
     end.
 
@@ -221,37 +231,78 @@ has_native_code_and_plugins(AppName, TempDirectory, TargetPath, AllApps) ->
                                         compressed]),
     {HasPortSpec, BuildPlugins0} = analyze_rebar_config(TempDirectory,
                                                         DirListing),
-    BuildPlugins = filter_out_unknown_plugins(AppName, BuildPlugins0, AllApps),
-    BuildTool  = get_build_tool(TempDirectory),
+    BuildPlugins = filter_out_bad_plugins(filter_out_unknown_plugins(AppName, BuildPlugins0, AllApps)),
+    BuildTool  = get_build_tools(DirListing),
+    io:format("Got ~p as build tool for ~s~n", [BuildTool, AppName]),
     {HasCSrc orelse HasPortSpec, BuildPlugins, BuildTool}.
 
--spec get_build_tool(file:name()) -> hex2nix:build_systems().
-get_build_tool(MetadataDirectory) ->
-    {ok, Items} = h2n_util:consult(filename:join(MetadataDirectory, "metadata.config")),
-    case lists:keysearch(<<"build_tools">>, 1, Items) of
-        {value, {_, BuildTools}} ->
-            resolve_build_tool(BuildTools);
-        false ->
-            rebar3
-    end.
+-spec get_build_tools([string()]) -> hex2nix:build_systems().
+get_build_tools(DirListing) ->
+    Properties =  lists:foldl(fun gather_build_properties/2, sets:new(),
+                              DirListing),
 
--spec resolve_build_tool([binary()] | binary()) -> hex2nix:build_systems().
-resolve_build_tool(AppList) when erlang:is_list(AppList) ->
-    lists:foldl(fun resolve_build_tool/2, rebar3, AppList).
+    is_mix(has_properties([has_lib, has_mix], Properties), Properties).
 
--spec resolve_build_tool([binary()] | binary(), any()) -> hex2nix:build_systems().
-resolve_build_tool(<<"rebar3">>, rebar3) ->
-    rebar3;
-resolve_build_tool(<<"make">>, _) ->
-    erlang_mk;
-resolve_build_tool(<<"rebar">>, rebar3) ->
-    rebar3;
-resolve_build_tool(<<"mix">>, _) ->
+
+-spec is_mix(boolean(), set:set()) -> hex2nix:build_systems().
+is_mix(true, _) ->
     mix;
-resolve_build_tool(<<"erlang.mk">>, _) ->
+is_mix(false, Properties) ->
+    is_erlang_mk(has_properties([has_src, has_erlang_mk], Properties), Properties).
+
+-spec is_erlang_mk(boolean(), set:set()) -> hex2nix:build_systems().
+is_erlang_mk(true, _) ->
     erlang_mk;
-resolve_build_tool(_, Current) ->
-    Current.
+is_erlang_mk(false, Properties) ->
+    is_rebar3(has_properties([has_src, has_rebar3], Properties), Properties).
+
+-spec is_rebar3(boolean(), set:set()) -> hex2nix:build_systems().
+is_rebar3(true, _) ->
+    rebar3;
+is_rebar3(false, Properties) ->
+    is_mix_override(has_properties([has_mix], Properties), Properties).
+
+-spec is_mix_override(boolean(), set:set()) -> hex2nix:build_systems().
+is_mix_override(true, _) ->
+    mix;
+is_mix_override(false, Properties) ->
+    is_erlang_mk_override(has_properties([has_erlang_mk], Properties), Properties).
+
+-spec is_erlang_mk_override(boolean(), set:set()) -> hex2nix:build_systems().
+is_erlang_mk_override(true, _) ->
+    erlang_mk;
+is_erlang_mk_override(false, Properties) ->
+    is_rebar3_override(has_properties([has_rebar3], Properties), Properties).
+
+-spec is_rebar3_override(boolean(), set:set()) -> hex2nix:build_systems().
+is_rebar3_override(true, _) ->
+    rebar3;
+is_rebar3_override(false, _) ->
+    make.
+
+-spec has_properties([has_src | has_lib | has_rebar3 | has_mix | has_erlang_mk |
+                      has_make], set:set()) ->
+                             boolean().
+has_properties(PropList, Properties) ->
+    lists:all(fun(E) ->
+                       sets:is_element(E, Properties)
+              end, PropList).
+
+-spec gather_build_properties(string(), atom()) -> hex2nix:build_systems() | none.
+gather_build_properties("rebar.config", Set) ->
+    sets:add_element(has_rebar3, Set);
+gather_build_properties("src", Set) ->
+    sets:add_element(has_src, Set);
+gather_build_properties("lib", Set) ->
+    sets:add_element(has_lib, Set);
+gather_build_properties("mix.exs", Set) ->
+    sets:add_element(has_mix, Set);
+gather_build_properties("erlang.mk", Set) ->
+    sets:add_element(has_erlang_mk, Set);
+gather_build_properties("Makefile", Set) ->
+    sets:add_element(has_make, Set);
+gather_build_properties(_, Other) ->
+    Other.
 
 -spec analyze_rebar_config(file:filename(), [file:filename()]) -> {boolean(), [hex2nix:app_name()]}.
 analyze_rebar_config(TempDirectory, DirListing) ->
@@ -268,6 +319,14 @@ analyze_rebar_config(TempDirectory, DirListing) ->
         _ ->
             {false, []}
     end.
+
+-spec filter_out_bad_plugins([atom()|binary()]) -> [atom()|binary()].
+filter_out_bad_plugins(BuildPlugins) ->
+    ToBeRemoved = [<<"rebar3_hex">>, rebar3_hex,
+                   <<"rebar3_eqc">>, rebar3_eqc],
+    lists:filter(fun(Element) ->
+                         not lists:member(Element, ToBeRemoved)
+                 end, BuildPlugins).
 
 -spec filter_out_unknown_plugins(hex2nix:app_name(),
                                  [hex2nix:app_name()],
@@ -347,7 +406,11 @@ parse_links(Name, {ok, Links})
                                                 {h2n_util:binary_to_lower(Key)
                                                 , Link}
                                      end,
-                                     Links));
+                                     %% Filter out broken links
+                                     lists:filter(fun({_,_}) -> true;
+                                                     (_) -> false
+                                                  end,
+                                                  Links)));
 parse_links(Name, false) ->
     io:format("No homepage link for ~s~n", [Name]),
     no_source.
@@ -526,12 +589,14 @@ parse_license1(_Name, <<"bsd-2">>) -> <<"bsd2">>;
 parse_license1(_Name, <<"bsd 2">>) -> <<"bsd2">>;
 parse_license1(_Name, <<"bsd-2 clause">>) -> <<"bsd2">>;
 parse_license1(_Name, <<"simplified bsd">>) -> <<"bsd2">>;
+parse_license1(_Name, <<"bsd 2-clause">>) -> <<"bsd2">>;
 parse_license1(_Name, <<"bsl-1.0">>) -> <<"boost">>;
 parse_license1(_Name, <<"apache license 2.0">>) -> <<"asl20">>;
 parse_license1(_Name, <<"bsl 1.0">>) -> <<"boost">>;
 parse_license1(_Name, <<"apache-2.0">>) -> <<"asl20">>;
 parse_license1(_Name, <<"apache 2.0">>) -> <<"asl20">>;
 parse_license1(_Name, <<"apache v2.0">>) -> <<"asl20">>;
+parse_license1(_Name, <<"apache version 2.0">>) -> <<"asl20">>;
 parse_license1(_Name, <<"apl 2.0">>) -> <<"asl20">>;
 parse_license1(_Name, <<"artistic-1.0">>) -> <<"artistic1">>;
 parse_license1(_Name, <<"artistic 1.0">>) -> <<"artistic1">>;
@@ -550,6 +615,7 @@ parse_license1(_Name, <<"mozilla public license version 2.0">>) -> <<"mpl20">>;
 parse_license1(_Name, <<"isc">>) -> <<"isc">>;
 parse_license1(_Name, <<"the mit license (mit)">>) -> <<"mit">>;
 parse_license1(_Name, <<"mit license">>) -> <<"mit">>;
+parse_license1(_Name, <<"mit licence">>) -> <<"mit">>;
 parse_license1(_Name, <<"gpl (for code)">>) -> <<"gpl3">>;
 parse_license1(_Name, <<"bsd (for code)">>) -> <<"bsd3">>;
 parse_license1(_Name, <<"mit">>) -> <<"mit">>;

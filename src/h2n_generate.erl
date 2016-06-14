@@ -65,7 +65,7 @@ create_dep(Dep = #dep_desc{app = {Name, Vsn}
     above(blank_line(above(sep([text(NixName), text("="), text("callPackage")])
                           , nest(par([text("(")
                                      , nest(par([section_header(Tool, Deps1)
-                                                , nest(app_body(Dep, Deps1))]))
+                                                , nest(app_body(Tool, Dep, Deps1))]))
                                      , text(") {};")])))),
           format_position(Name, NixName, Position)).
 
@@ -76,10 +76,9 @@ format_position(Name, NixName, root) ->
 format_position(_, _, _) ->
     empty().
 
--spec app_body(h2n_fetcher:dep_despc(), [binary()]) -> prettypr:document().
-app_body(Dep = #dep_desc{app = {Name, Vsn}
-                        , build_plugins = BuildPlugins
-                        , build_tool = rebar3}, Deps) ->
+-spec app_body(hex2nix:build_tool(), h2n_fetcher:dep_despc(), [binary()]) -> prettypr:document().
+app_body(rebar3, Dep = #dep_desc{app = {Name, Vsn}
+                                , build_plugins = BuildPlugins}, Deps) ->
     par([break(sep([text("buildRebar3"), text("({")]))
         , nest(par([key_value(<<"name">>, Name)
                    , key_value(<<"version">>, Vsn)
@@ -89,8 +88,7 @@ app_body(Dep = #dep_desc{app = {Name, Vsn}
                    , beam_deps(Deps)
                    , meta(Dep)]))
         , text("} // packageOverrides)")]);
-app_body(Dep = #dep_desc{app = {Name, Vsn}
-                        , build_tool = mix}, Deps) ->
+app_body(mix, Dep = #dep_desc{app = {Name, Vsn}}, Deps) ->
     par([break(sep([text("buildMix"), text("({")]))
         , nest(par([key_value(<<"name">>, Name)
                    , key_value(<<"version">>, Vsn)
@@ -98,8 +96,8 @@ app_body(Dep = #dep_desc{app = {Name, Vsn}
                    , beam_deps(Deps)
                    , meta(Dep)]))
         , text("} // packageOverrides)")]);
-app_body(Dep = #dep_desc{app = {Name, Vsn}
-                        , build_tool = erlang_mk}, Deps) ->
+app_body(BuildTool, Dep = #dep_desc{app = {Name, Vsn}}, Deps)
+  when BuildTool == make orelse BuildTool == erlang_mk ->
     par([break(sep([text("buildErlangMk"), text("({")]))
         , nest(par([key_value(<<"name">>, Name)
                    , key_value(<<"version">>, Vsn)
@@ -213,7 +211,8 @@ section_header(mix, Deps) ->
                                 <<"packageOverrides ? {}">>,
                                 <<"fetchHex">> | Deps], ",", []))
         , text("}:")]);
-section_header(erlang_mk, Deps) ->
+section_header(BuildTool, Deps)
+  when BuildTool == erlang_mk orelse BuildTool == make ->
     sep([text("{ ")
         , nest(expand_arg_list([<<"buildErlangMk">>,
                                 <<"packageOverrides ? {}">>,
