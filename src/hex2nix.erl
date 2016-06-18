@@ -100,9 +100,9 @@ do_main(Opts) ->
                           , detail=AppData1},
     Deps =
         ordsets:from_list(
-          h2n_fetcher:update_with_information_from_hex_pm(ShouldCache
-                                                         , Detail
-                                                         , h2n_resolver:resolve_dependencies(Detail))),
+          remove_unbuildable_deps(h2n_fetcher:update_with_information_from_hex_pm(ShouldCache
+                                                                                 , Detail
+                                                                                 , h2n_resolver:resolve_dependencies(Detail)))),
 
     write_nix_expressions(Deps, ordsets:new(), NixPkgsDir),
     case ShouldBuild of
@@ -118,6 +118,21 @@ do_main(Opts) ->
         false ->
             ok
     end.
+
+-spec remove_unbuildable_deps([h2n_fetcher:dep_desc()]) -> [h2n_fetcher:dep_desc()].
+remove_unbuildable_deps(Deps) ->
+    lists:filter(fun buildable_dep/1, Deps).
+
+-spec buildable_dep(h2n_fetcher:dep_desc()) -> boolean().
+buildable_dep(#dep_desc{deps = Deps,
+                          build_plugins = Plugins}) ->
+    (not lists:member(<<"rebar3_git_vsn">>, Plugins)) orelse
+        lists:any(fun({<<"rebar3_git_vsn">>, _}) ->
+                         false;
+                     (_) ->
+                          true
+                  end, Deps).
+
 
 -spec try_build_and_write_packages(h2n_fetcher:dep_desc(),
                                    ordsets:ordset(),
