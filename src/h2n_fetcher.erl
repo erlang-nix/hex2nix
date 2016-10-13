@@ -81,7 +81,7 @@ get_registry(ShouldCache, HexRegistry) ->
                          , [HexRegistry, TempDirectory]),
                 {ok, "200", _, {file, GzippedFileName}} =
                     ibrowse:send_req(HexRegistry
-                                    , []
+                                    , [{"User-Agent", "hex2nix"}]
                                     , get
                                     , []
                                     , [{save_response_to_file,
@@ -167,7 +167,7 @@ get_app_detail_from_hex_pm(AppName) ->
                 Url = h2n_util:iolist_to_list(["https://hex.pm/api/packages/"
                                               , AppName]),
                 ibrowse:send_req(Url
-                                , [{"Accept", "application/json"}]
+                                , [{"User-Agent", "hex2nix"}, {"Accept", "application/json"}]
                                 , get
                                 , []
                                 , h2n_util:get_ibrowse_http_env())
@@ -197,7 +197,7 @@ get_deep_meta_for_package(AppName, AppVsn, AllApps) ->
     io:format("Pulling From ~s to ~s~n"
              , [Url, TargetPath]),
     case ibrowse:send_req(Url
-                         , []
+                         , [{"User-Agent", "hex2nix"}]
                          , get
                          , []
                          , [{save_response_to_file,
