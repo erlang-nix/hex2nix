@@ -56,6 +56,8 @@
            "happens before dependency resolution, hence to successfully import "
            "a package filter need to allow both the package and all it's "
            "dependencies."}
+        , {token, $t, "token", {string, none}
+          , "Use an API token when accessing hex.pm for higher rate limits."}
         , {help, $h, "help", {boolean, false}
           , "Print the help message for this command"}
         ]).
@@ -89,6 +91,7 @@ do_main(Opts) ->
     {value, {_, ShouldCache}} = lists:keysearch(cache, 1, Opts),
     {value, {_, ShouldBuild}} = lists:keysearch(build, 1, Opts),
     {value, {_, Filter}} = lists:keysearch(filter, 1, Opts),
+    {value, {_, HexApiToken}} = lists:keysearch(token, 1, Opts),
 
     {DepRoots0, AppData0} = split_data_into_versions_and_detail(
                               h2n_fetcher:get_registry(ShouldCache, HexRegistry)),
@@ -98,11 +101,12 @@ do_main(Opts) ->
     Detail = #indexed_deps{roots=sets:from_list(DepRoots1)
                           , index=AllBuildableVersions
                           , detail=AppData1},
-    Deps =
-        ordsets:from_list(
-          remove_unbuildable_deps(h2n_fetcher:update_with_information_from_hex_pm(ShouldCache
-                                                                                 , Detail
-                                                                                 , h2n_resolver:resolve_dependencies(Detail)))),
+    Fetched = h2n_fetcher:update_with_information_from_hex_pm(
+                ShouldCache
+               , HexApiToken
+               , Detail
+               , h2n_resolver:resolve_dependencies(Detail)),
+    Deps = ordsets:from_list(remove_unbuildable_deps(Fetched)),
 
     write_nix_expressions(Deps, ordsets:new(), NixPkgsDir),
     case ShouldBuild of
