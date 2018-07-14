@@ -184,14 +184,15 @@ get_app_detail_from_hex_pm(Token, AppName) ->
                                 , []
                                 , h2n_util:get_ibrowse_http_env())
         end,
-    {ok, Body} = case take_at_least_one_second(Thunk) of
+    Authenticated = Token /= none,
+    {ok, Body} = case throttle_for_rate_limit(Authenticated, Thunk) of
                      {ok, "200", _, Body0} ->
                          {ok, Body0};
                      {error, req_timedout} ->
-                         {ok, "200", _, Body0} = take_at_least_one_second(Thunk),
+                         {ok, "200", _, Body0} = throttle_for_rate_limit(Authenticated, Thunk),
                          {ok, Body0};
                      {conn_failed, {error, nxdomain}}  ->
-                         {ok, "200", _, Body0} = take_at_least_one_second(Thunk),
+                         {ok, "200", _, Body0} = throttle_for_rate_limit(Authenticated, Thunk),
                          {ok, Body0}
            end,
     jsx:decode(erlang:iolist_to_binary(Body)).
@@ -642,18 +643,30 @@ parse_license1(Name, License) ->
               "'Unspecified free software license'~n", [License, Name]),
     <<"free">>.
 
-%% @doc This exists to get around a rate limiter. Essentially, hex
-%% limits us to one request per second. This allows us to do that.
--spec take_at_least_one_second(fun(() -> Result)) -> Result.
-take_at_least_one_second(Thunk) ->
+%% @doc Authenticated API calls to hex.pm are limited at 500
+%% requests/minute. Unauthenticated calls are limited at 100/minute.
+%%
+%% This function introduces an artificial delay after making a request
+%% to ensure that the rate limit is not exceeded.
+%%
+%% The delay is set appropriately based on whether the user has
+%% supplied a token or not. The actual requests & processing of the
+%% data (which happens serially) consume time, too, so the delay is
+%% optimised for the best case.
+-spec throttle_for_rate_limit(boolean(), fun(() -> Result)) -> Result.
+throttle_for_rate_limit(Authenticated, Thunk) ->
+    Delay = case Authenticated of
+                true -> 125;
+                false -> 605
+            end,
     Start = erlang:system_time(milli_seconds),
     Result = Thunk(),
     Now = erlang:system_time(milli_seconds),
     Wait = Now - Start,
-    case Wait > 1000 of
+    case Wait > Delay of
         true ->
             Result;
         false ->
-            timer:sleep(1000 - Wait),
+            timer:sleep(Delay - Wait),
             Result
     end.
