@@ -12,7 +12,7 @@
 %%
 %% API
 %%
--export([update_with_information_from_hex_pm/3,
+-export([update_with_information_from_hex_pm/4,
          get_registry/2]).
 
 %%
@@ -29,12 +29,14 @@
              , dep_desc/0
              , sha/0]).
 
+-type token() :: string() | none.
 -type license() :: binary().
 -type description() :: binary() | none.
 -type link() :: binary() | no_source.
 -type position() :: root | historical.
 -type dep_desc() :: #dep_desc{}.
 -type sha() :: binary(). %% A sha 256 hash
+-type header() :: {string(), string()}. % an HTTP header
 
 %%
 %% Definitions
@@ -49,10 +51,11 @@
 %% Exported Functions
 %% ============================================================================
 -spec update_with_information_from_hex_pm(boolean()
+                                         , token()
                                          , hex2nix:deps()
                                          , [h2n_resolver:app_dep()]) ->
                                          [dep_desc()].
-update_with_information_from_hex_pm(true, AllApps, Deps) ->
+update_with_information_from_hex_pm(true, Token, AllApps, Deps) ->
     Cache =
         case h2n_util:consult(?CACHE_FILE) of
             {ok, [CachedDeps]} ->
@@ -63,13 +66,13 @@ update_with_information_from_hex_pm(true, AllApps, Deps) ->
                 []
         end,
 
-    NewDeps = update_with_information_from_hex_pm2(AllApps, Cache, Deps),
+    NewDeps = update_with_information_from_hex_pm2(Token, AllApps, Cache, Deps),
     %% Write back to cache with newer data earlier on the list, so
     %% lists:keysearch will pick it up earlier.
     ok = ec_file:write_term(?CACHE_FILE, NewDeps ++ Cache),
     NewDeps;
-update_with_information_from_hex_pm(false, AllApps, Deps) ->
-    update_with_information_from_hex_pm2(AllApps, [], Deps).
+update_with_information_from_hex_pm(false, Token, AllApps, Deps) ->
+    update_with_information_from_hex_pm2(Token, AllApps, [], Deps).
 
 -spec get_registry(boolean(), file:filename()) ->  [any()].
 get_registry(ShouldCache, HexRegistry) ->
@@ -116,10 +119,11 @@ decompress_file(GzippedFileName, TargetDirectory) ->
     {ok, ResultFile}.
 
 -spec update_with_information_from_hex_pm2(hex2nix:deps(),
+                                           token(),
                                            [dep_desc()],
                                            [h2n_resolver:app_dep()]) ->
                                                   [dep_desc()].
-update_with_information_from_hex_pm2(AllApps, Cache, Deps) ->
+update_with_information_from_hex_pm2(Token, AllApps, Cache, Deps) ->
     lists:filtermap(
       fun (AppDep={App={AppName, AppVsn}, _Deps}) ->
               case lists:keysearch(App, #dep_desc.app, Cache) of
@@ -128,13 +132,14 @@ update_with_information_from_hex_pm2(AllApps, Cache, Deps) ->
                       {true, Cached};
                   false ->
                       io:format("Fetching ~s ~s details from hex.pm.~n", [AppName, AppVsn]),
-                      decorate_app(AllApps, AppDep)
+                      decorate_app(Token, AllApps, AppDep)
               end
       end, Deps).
 
--spec decorate_app(hex2nix:deps(), {hex2nix:app(), [hex2nix:app()]}) ->
+-spec decorate_app(token(), hex2nix:deps(), {hex2nix:app(), [hex2nix:app()]}) ->
                           {true, dep_desc()} | false.
-decorate_app(#indexed_deps{roots=Roots} = AllApps,
+decorate_app(Token,
+             #indexed_deps{roots=Roots} = AllApps,
              {App={AppName, AppVsn}, Deps}) ->
     IsRoot = case sets:is_element(App, Roots) of
                  true ->
@@ -143,7 +148,7 @@ decorate_app(#indexed_deps{roots=Roots} = AllApps,
                      historical
              end,
     {Description, Licenses, Link} =
-        get_metadata(AppName, get_app_detail_from_hex_pm(AppName)),
+        get_metadata(AppName, get_app_detail_from_hex_pm(Token, AppName)),
     case get_deep_meta_for_package(AppName, AppVsn, AllApps) of
         {Sha, HasNativeCode, BuildPlugins, BuildTool} ->
             {true, #dep_desc{app = App
@@ -160,26 +165,34 @@ decorate_app(#indexed_deps{roots=Roots} = AllApps,
             false
     end.
 
--spec get_app_detail_from_hex_pm(binary()) -> jsx:json_term().
-get_app_detail_from_hex_pm(AppName) ->
+-spec prepare_headers(token()) -> [header()].
+prepare_headers(none) ->
+    [{"Accept", "application/json"},
+     {"User-Agent", "hex2nix"}];
+prepare_headers(Token) ->
+    [{"Authorization", Token}] ++ prepare_headers(none).
+
+-spec get_app_detail_from_hex_pm(token(), binary()) -> jsx:json_term().
+get_app_detail_from_hex_pm(Token, AppName) ->
     Thunk =
         fun() ->
                 Url = h2n_util:iolist_to_list(["https://hex.pm/api/packages/"
                                               , AppName]),
                 ibrowse:send_req(Url
-                                , [{"User-Agent", "hex2nix"}, {"Accept", "application/json"}]
+                                , prepare_headers(Token)
                                 , get
                                 , []
                                 , h2n_util:get_ibrowse_http_env())
         end,
-    {ok, Body} = case take_at_least_one_second(Thunk) of
+    Authenticated = Token /= none,
+    {ok, Body} = case throttle_for_rate_limit(Authenticated, Thunk) of
                      {ok, "200", _, Body0} ->
                          {ok, Body0};
                      {error, req_timedout} ->
-                         {ok, "200", _, Body0} = take_at_least_one_second(Thunk),
+                         {ok, "200", _, Body0} = throttle_for_rate_limit(Authenticated, Thunk),
                          {ok, Body0};
                      {conn_failed, {error, nxdomain}}  ->
-                         {ok, "200", _, Body0} = take_at_least_one_second(Thunk),
+                         {ok, "200", _, Body0} = throttle_for_rate_limit(Authenticated, Thunk),
                          {ok, Body0}
            end,
     jsx:decode(erlang:iolist_to_binary(Body)).
@@ -630,18 +643,30 @@ parse_license1(Name, License) ->
               "'Unspecified free software license'~n", [License, Name]),
     <<"free">>.
 
-%% @doc This exists to get around a rate limiter. Essentially, hex
-%% limits us to one request per second. This allows us to do that.
--spec take_at_least_one_second(fun(() -> Result)) -> Result.
-take_at_least_one_second(Thunk) ->
+%% @doc Authenticated API calls to hex.pm are limited at 500
+%% requests/minute. Unauthenticated calls are limited at 100/minute.
+%%
+%% This function introduces an artificial delay after making a request
+%% to ensure that the rate limit is not exceeded.
+%%
+%% The delay is set appropriately based on whether the user has
+%% supplied a token or not. The actual requests & processing of the
+%% data (which happens serially) consume time, too, so the delay is
+%% optimised for the best case.
+-spec throttle_for_rate_limit(boolean(), fun(() -> Result)) -> Result.
+throttle_for_rate_limit(Authenticated, Thunk) ->
+    Delay = case Authenticated of
+                true -> 125;
+                false -> 605
+            end,
     Start = erlang:system_time(milli_seconds),
     Result = Thunk(),
     Now = erlang:system_time(milli_seconds),
     Wait = Now - Start,
-    case Wait > 1000 of
+    case Wait > Delay of
         true ->
             Result;
         false ->
-            timer:sleep(1000 - Wait),
+            timer:sleep(Delay - Wait),
             Result
     end.
