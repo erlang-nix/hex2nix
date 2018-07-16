@@ -32,7 +32,7 @@ You can run `hex2nix` with no arguments and it will dump a
 give it an `output-path` and point that to the erlang-modules
 directory of your nixpkgs repo. That is usually
 `pkgs/development/erlang-modules`. By default it pulls from the
-current canonical Hex.pm registry, howeever you can give it a
+current canonical Hex.pm registry, however you can give it a
 different url if you so desire. Finally, you can tell it to cache the
 intermediate results. This is mostly useful during development of
 `hex2nix` so it doesn't have to redownload the entire package
