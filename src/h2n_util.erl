@@ -120,7 +120,7 @@ json_get_list(Key, Object) ->
 
 -spec temp_directory() -> string().
 temp_directory() ->
-    lib:nonl(cmd("mktemp -d")).
+    string:chomp(cmd("mktemp -d")).
 
 -spec cmd(string()) -> string().
 cmd(Cmd) ->
