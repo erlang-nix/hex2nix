@@ -147,22 +147,34 @@ decorate_app(Token,
                  false ->
                      historical
              end,
-    {Description, Licenses, Link} =
-        get_metadata(AppName, get_app_detail_from_hex_pm(Token, AppName)),
-    case get_deep_meta_for_package(AppName, AppVsn, AllApps) of
-        {Sha, HasNativeCode, BuildPlugins, BuildTool} ->
-            {true, #dep_desc{app = App
-                            , description = Description
-                            , position = IsRoot
-                            , licenses = Licenses
-                            , homepage = Link
-                            , sha = Sha
-                            , build_plugins = BuildPlugins
-                            , has_native_code = HasNativeCode
-                            , build_tool = BuildTool
-                            , deps = Deps}};
-        no_metadata_available ->
-            false
+    PackageData = get_app_detail_from_hex_pm(Token, AppName),
+    %% N.B. the "status" field is only populated when queries are
+    %% unsuccessful - it is not defined when queries succeed. If the
+    %% status is 404 ("Page not found") then ignore this package and
+    %% carry on, else throw an exception for all other status values.
+    case lists:keysearch(<<"status">>, 1, PackageData) of
+        {value, {_, 404}} ->
+            false;
+        {value, {_, Status}} ->
+            throw({bad_status, Status, PackageData});
+        _ ->
+            {Description, Licenses, Link} =
+                get_metadata(AppName, PackageData),
+            case get_deep_meta_for_package(AppName, AppVsn, AllApps) of
+                {Sha, HasNativeCode, BuildPlugins, BuildTool} ->
+                    {true, #dep_desc{app = App
+                                    , description = Description
+                                    , position = IsRoot
+                                    , licenses = Licenses
+                                    , homepage = Link
+                                    , sha = Sha
+                                    , build_plugins = BuildPlugins
+                                    , has_native_code = HasNativeCode
+                                    , build_tool = BuildTool
+                                    , deps = Deps}};
+                no_metadata_available ->
+                    false
+            end
     end.
 
 -spec prepare_headers(token()) -> [header()].
@@ -186,7 +198,7 @@ get_app_detail_from_hex_pm(Token, AppName) ->
         end,
     Authenticated = Token /= none,
     {ok, Body} = case throttle_for_rate_limit(Authenticated, Thunk) of
-                     {ok, "200", _, Body0} ->
+                     {ok, _, _, Body0} ->
                          {ok, Body0};
                      {error, req_timedout} ->
                          {ok, "200", _, Body0} = throttle_for_rate_limit(Authenticated, Thunk),
